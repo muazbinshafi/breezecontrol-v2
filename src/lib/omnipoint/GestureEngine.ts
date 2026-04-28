@@ -8,7 +8,7 @@ import {
   FilesetResolver,
   type HandLandmarkerResult,
 } from "@mediapipe/tasks-vision";
-import { TelemetryStore, type GestureKind } from "./TelemetryStore";
+import { TelemetryStore, type GestureKind, type HandLandmarks } from "./TelemetryStore";
 import type { HIDBridge } from "./HIDBridge";
 import { OneEuroFilter2D, OneEuroFilter3D } from "./OneEuroFilter";
 
