@@ -303,75 +303,131 @@ export class GestureEngine {
 
     let confidence = 0;
     if (result.landmarks.length > 0) {
-      // Dual-hand support: pick whichever hand is most *actively* gesturing
-      // as the controller for this frame. This lets the user switch hands
-      // freely (or use either one) — the stronger-intent hand wins every
-      // frame. "Intent" = pinch close, a clear pointing pose, or an active
-      // static pose; falls back to MediaPipe handedness confidence.
-      let bestIdx = 0;
-      let bestIntent = -Infinity;
+      // ===== Dual-hand processing =====
+      // We process EVERY detected hand through its own independent state
+      // (filters, click state, scroll history). Both hands produce gestures
+      // and motion in parallel; we then merge them into a single OS cursor
+      // stream — the hand with the strongest intent this frame drives the
+      // cursor, but click/scroll fired by the OTHER hand are still emitted.
+      const seenSides = new Set<"Left" | "Right">();
+      const perHand: {
+        side: "Left" | "Right";
+        h: HandState;
+        intent: number;
+        score: number;
+        gesture: GestureKind;
+        pressure: number;
+        landmarks: HandLandmarks;
+        fingersExtended: [boolean, boolean, boolean, boolean, boolean];
+        fingerCount: number;
+        pinch: number;
+      }[] = [];
+
       for (let i = 0; i < result.landmarks.length; i++) {
-        const lm = result.landmarks[i];
-        const score = result.handedness?.[i]?.[0]?.score ?? 0;
-        // Pinch ratio (thumb-tip ↔ index-tip over hand scale)
-        const dt = lm[4], di = lm[8], mcp = lm[5], wr = lm[0];
-        const pinchRaw = Math.hypot(dt.x - di.x, dt.y - di.y, dt.z - di.z);
-        const scale = Math.max(
-          0.05,
-          Math.hypot(mcp.x - wr.x, mcp.y - wr.y, mcp.z - wr.z),
-        );
-        const pinch = pinchRaw / scale;
-        // Finger-extended crude count (reused intent signal)
-        const idxExt = lm[8].y < lm[6].y - 0.02 ? 1 : 0;
-        const midExt = lm[12].y < lm[10].y - 0.02 ? 1 : 0;
-        const ringExt = lm[16].y < lm[14].y - 0.02 ? 1 : 0;
-        const pinkyExt = lm[20].y < lm[18].y - 0.02 ? 1 : 0;
-        const fingers = idxExt + midExt + ringExt + pinkyExt;
-        // Stronger intent when pinching, or when showing a clean pose.
-        const pinchIntent = Math.max(0, 1 - pinch / 0.8); // 0..~1
+        const handednessSrc = result.handedness?.[i]?.[0]?.categoryName ?? "";
+        // Selfie-mirror correction: MediaPipe reports the camera-frame side.
+        const side: "Left" | "Right" =
+          handednessSrc === "Left" ? "Right" :
+          handednessSrc === "Right" ? "Left" :
+          // Unknown handedness (rare) — fall back to slot 0 = Right, 1 = Left.
+          (i === 0 ? "Right" : "Left");
+        if (seenSides.has(side)) continue; // never two hands on same side
+        seenSides.add(side);
+
+        let h = this.hands.get(side);
+        if (!h) {
+          h = new HandState();
+          this.hands.set(side, h);
+        }
+        h.lastSeenAt = tNow;
+
+        const out = this.processHand(result, tNow, i, side, h);
+        // Compute intent score for primary-hand selection.
+        const score = result.handedness?.[i]?.[0]?.score ?? 0.8;
+        const fingers = out.fingerCount - (out.fingersExtended[0] ? 1 : 0);
+        const pinchIntent = Math.max(0, 1 - out.pinch / 0.8);
         const poseIntent = fingers === 1 || fingers === 4 || fingers === 0 ? 0.4 : 0.15;
-        const intent = pinchIntent * 1.2 + poseIntent + score * 0.3;
-        if (intent > bestIntent) {
-          bestIntent = intent;
-          bestIdx = i;
+        // Active gestures (click/drag/scroll) get a big boost so that hand
+        // wins as primary the moment the user acts with it.
+        const actionBoost =
+          out.gesture === "click" || out.gesture === "drag" ||
+          out.gesture === "scroll_up" || out.gesture === "scroll_down" ||
+          out.gesture === "right_click" ? 1.5 : 0;
+        const intent = pinchIntent * 1.2 + poseIntent + score * 0.3 + actionBoost;
+        perHand.push({
+          side, h, intent, score,
+          gesture: out.gesture,
+          pressure: out.pressure,
+          landmarks: out.landmarks,
+          fingersExtended: out.fingersExtended,
+          fingerCount: out.fingerCount,
+          pinch: out.pinch,
+        });
+      }
+
+      // Drop hand state for sides that disappeared this frame.
+      for (const side of Array.from(this.hands.keys())) {
+        if (!seenSides.has(side)) {
+          const h = this.hands.get(side)!;
+          // If a hand has been gone for >300 ms, fully discard its state.
+          if (tNow - h.lastSeenAt > 300) {
+            this.hands.delete(side);
+          }
         }
       }
-      // Reset landmark filters when switching controller hand so the new
-      // hand doesn't inherit the previous hand's smoothing history (which
-      // would cause a visible cursor jump / false pinch).
-      if ((this as unknown as { _lastCtrlIdx?: number })._lastCtrlIdx !== bestIdx) {
-        this.fThumb.reset();
-        this.fIndex.reset();
-        this.fIndexMcp.reset();
-        this.fWrist.reset();
-        this.fMiddleTip.reset();
-        this.fCursor.reset();
-        this.prevIndex = null;
-        this.prevPinch = null;
-        this.prevPinchT = 0;
-        (this as unknown as { _lastCtrlIdx?: number })._lastCtrlIdx = bestIdx;
+
+      if (perHand.length > 0) {
+        // Pick primary: highest-intent. Add a small bias for the previous
+        // primary so we don't flicker frame-to-frame on near-ties.
+        let primary = perHand[0];
+        for (const p of perHand) {
+          const bias = p.side === this.lastPrimary ? 0.15 : 0;
+          const pBias = primary.side === this.lastPrimary ? 0.15 : 0;
+          if (p.intent + bias > primary.intent + pBias) primary = p;
+        }
+        this.lastPrimary = primary.side;
+        confidence = primary.score;
+
+        // Emit motion from the primary hand. Then, for any OTHER hand
+        // that is firing a click/scroll/right-click, emit its event too
+        // (without moving the cursor) so both hands can act in parallel.
+        this.emitMotion(primary.h, primary.gesture, primary.pressure);
+        for (const p of perHand) {
+          if (p.side === primary.side) continue;
+          if (p.gesture === "click" || p.gesture === "right_click" ||
+              p.gesture === "scroll_up" || p.gesture === "scroll_down") {
+            // Use the primary cursor coordinates — secondary hand contributes
+            // the gesture, but the click target is wherever the primary
+            // cursor currently is. This matches the user's mental model:
+            // "right hand aims, left hand taps to click".
+            this.emitMotion(primary.h, p.gesture, p.pressure);
+          }
+        }
+
+        // Telemetry reflects the primary hand for the live overlay, but we
+        // include landmarks from BOTH hands so the HUD draws them all.
+        const allLandmarks: HandLandmarks = [];
+        for (const p of perHand) {
+          for (const pt of p.landmarks) allLandmarks.push(pt);
+        }
+        TelemetryStore.set({
+          cursorX: primary.h.cursor.x,
+          cursorY: primary.h.cursor.y,
+          gesture: primary.gesture,
+          handPresent: true,
+          handedness: primary.side,
+          fingersExtended: primary.fingersExtended,
+          fingerCount: primary.fingerCount,
+          pinchDistance: primary.pinch,
+          landmarks: allLandmarks,
+          precisionMode: primary.h.cursorSpeed < 0.05,
+        });
       }
-      confidence = result.handedness?.[bestIdx]?.[0]?.score ?? 0.8;
-      this.processLandmarks(result, tNow, bestIdx);
     } else {
       confidence = 0;
-      this.smoothedIndex = null;
-      this.smoothedThumb = null;
-      this.fThumb.reset();
-      this.fIndex.reset();
-      this.fIndexMcp.reset();
-      this.fWrist.reset();
-      this.fMiddleTip.reset();
-      this.fCursor.reset();
-      this.gestureCandidate = "none";
-      this.gestureCandidateCount = 0;
-      this.committedGesture = "none";
-      this.prevIndex = null;
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
-      this.prevPinch = null;
-      this.prevPinchT = 0;
-      this.pinchVelocity = 0;
+      for (const h of this.hands.values()) h.reset();
+      this.hands.clear();
+      this.lastPrimary = null;
       TelemetryStore.set({
         handPresent: false,
         handedness: "none",
@@ -380,6 +436,7 @@ export class GestureEngine {
         pinchDistance: 0,
         gesture: "none",
         landmarks: [],
+        precisionMode: false,
       });
     }
 
