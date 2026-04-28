@@ -19,6 +19,9 @@ import { GestureTour } from "@/components/omnipoint/GestureTour";
 import { PinchConfidenceOverlay } from "@/components/omnipoint/PinchConfidenceOverlay";
 import { onEngineConfigApply } from "@/lib/omnipoint/GestureProfiles";
 import { GestureSettingsStore } from "@/lib/omnipoint/GestureSettings";
+import { DualHandDebugOverlay } from "@/components/omnipoint/DualHandDebugOverlay";
+import { CameraSetupCheck } from "@/components/omnipoint/CameraSetupCheck";
+import { BridgeStatusBanner } from "@/components/omnipoint/BridgeStatusBanner";
 
 const Demo = () => {
   const [initialized, setInitialized] = useState(false);
@@ -31,6 +34,9 @@ const Demo = () => {
   const [livePanelOpen, setLivePanelOpen] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [pinchOverlayOn, setPinchOverlayOn] = useState(false);
+  const [debugOverlayOn, setDebugOverlayOn] = useState(true);
+  const [setupCheckOpen, setSetupCheckOpen] = useState(false);
+  const [dualHandPassed, setDualHandPassed] = useState(false);
 
   const [config, setConfigState] = useState<EngineConfig>(defaultConfig);
   const [bridgeUrl, setBridgeUrl] = useState("ws://localhost:8765");
@@ -275,6 +281,17 @@ const Demo = () => {
     engineRef.current?.resetState();
   }, []);
 
+  // Auto-open the dual-hand setup check the first time a user is initialized
+  // so they verify framing before relying on dual-hand control.
+  useEffect(() => {
+    if (!initialized) return;
+    if (dualHandPassed) return;
+    const seen = localStorage.getItem("omnipoint:dualHandSetupSeen");
+    if (seen === "1") return;
+    const id = window.setTimeout(() => setSetupCheckOpen(true), 1500);
+    return () => window.clearTimeout(id);
+  }, [initialized, dualHandPassed]);
+
   const showInit = !initialized;
 
   return (
@@ -347,6 +364,25 @@ const Demo = () => {
           bridgeUrl={bridgeUrl}
           setBridgeUrl={setBridgeUrl}
           onTestBridge={handleTestBridge}
+        />
+        {!showInit && (
+          <BridgeStatusBanner
+            active={controlMode === "bridge"}
+            onReconnect={handleReconnect}
+            onOpenTroubleshooter={() => setTroubleshooterOpen(true)}
+          />
+        )}
+        {!showInit && debugOverlayOn && <DualHandDebugOverlay />}
+        <CameraSetupCheck
+          open={setupCheckOpen}
+          onClose={() => {
+            setSetupCheckOpen(false);
+            localStorage.setItem("omnipoint:dualHandSetupSeen", "1");
+          }}
+          onPass={() => {
+            setDualHandPassed(true);
+            localStorage.setItem("omnipoint:dualHandSetupSeen", "1");
+          }}
         />
         {!showInit && browserCursor.mode === "draw" && (
           <>
