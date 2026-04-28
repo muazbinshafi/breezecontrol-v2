@@ -145,7 +145,6 @@ export class GestureEngine {
     this.canvas = canvas;
     this.bridge = bridge;
     this.config = config;
-    this.applySmoothingParams();
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas 2D context unavailable");
     this.ctx = ctx;
@@ -851,9 +850,13 @@ export class GestureEngine {
       ctx.restore();
     }
 
-    // Cursor crosshair (in active zone -> camera coords)
-    const curCamX = (zx0 + this.cursor.x * zoneW * w);
-    const curCamY = (zy0 + this.cursor.y * zoneH * h);
+    // Cursor crosshair from primary hand (active zone → camera coords).
+    const primary =
+      (this.lastPrimary && this.hands.get(this.lastPrimary)) ||
+      this.hands.values().next().value;
+    if (!primary) return;
+    const curCamX = (zx0 + primary.cursor.x * zoneW * w);
+    const curCamY = (zy0 + primary.cursor.y * zoneH * h);
     ctx.strokeStyle = "hsl(160 84% 60%)";
     ctx.lineWidth = 1;
     ctx.beginPath();
