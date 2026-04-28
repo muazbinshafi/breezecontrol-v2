@@ -451,9 +451,27 @@ export class GestureEngine {
     this.draw(result);
   }
 
-  private processLandmarks(result: HandLandmarkerResult, tNow: number, handIdx = 0) {
+  /**
+   * Run the full per-hand pipeline (filters, click state, gesture detection)
+   * for a single hand using its own HandState. Returns the gesture & metadata
+   * — caller decides which hand becomes primary and is responsible for
+   * emitting motion to the bridge.
+   */
+  private processHand(
+    result: HandLandmarkerResult,
+    tNow: number,
+    handIdx: number,
+    handedness: "Left" | "Right",
+    h: HandState,
+  ): {
+    gesture: GestureKind;
+    pressure: number;
+    landmarks: HandLandmarks;
+    fingersExtended: [boolean, boolean, boolean, boolean, boolean];
+    fingerCount: number;
+    pinch: number;
+  } {
     const lm = result.landmarks[handIdx];
-    const handednessSrc = result.handedness?.[handIdx]?.[0]?.categoryName ?? "";
     const thumbTip = lm[4];
     const indexTip = lm[8];
     const middleTip = lm[12];
@@ -465,153 +483,121 @@ export class GestureEngine {
     const pinkyPip = lm[18];
     const wrist = lm[0];
 
-    // Apply 3D One-Euro filter to the critical landmarks. Each axis adapts its
-    // cutoff to the motion speed of THAT axis, so micro-tremor (sub-mm) is
-    // killed while real motion passes through with no perceptible lag.
-    this.applySmoothingParams();
-    const [tx, ty, tz] = this.fThumb.filter(thumbTip.x, thumbTip.y, thumbTip.z, tNow);
-    const [ixs, iys, izs] = this.fIndex.filter(indexTip.x, indexTip.y, indexTip.z, tNow);
-    // Smooth the reference landmarks too — they feed the hand-scale denominator
-    // for pinch-ratio. Noisy reference = noisy ratio = false-positive clicks.
-    const [imx, imy, imz] = this.fIndexMcp.filter(lm[5].x, lm[5].y, lm[5].z, tNow);
-    const [wx, wy, wz] = this.fWrist.filter(wrist.x, wrist.y, wrist.z, tNow);
-    const [mx, my, mz] = this.fMiddleTip.filter(middleTip.x, middleTip.y, middleTip.z, tNow);
-    this.smoothedThumb = [tx, ty, tz];
-    this.smoothedIndex = [ixs, iys, izs];
+    this.applySmoothingParams(h);
+    const [tx, ty, tz] = h.fThumb.filter(thumbTip.x, thumbTip.y, thumbTip.z, tNow);
+    const [ixs, iys, izs] = h.fIndex.filter(indexTip.x, indexTip.y, indexTip.z, tNow);
+    const [imx, imy, imz] = h.fIndexMcp.filter(lm[5].x, lm[5].y, lm[5].z, tNow);
+    const [wx, wy, wz] = h.fWrist.filter(wrist.x, wrist.y, wrist.z, tNow);
+    const [mx, my, mz] = h.fMiddleTip.filter(middleTip.x, middleTip.y, middleTip.z, tNow);
+    h.smoothedThumb = [tx, ty, tz];
+    h.smoothedIndex = [ixs, iys, izs];
 
-    const ix = this.smoothedIndex[0];
-    const iy = this.smoothedIndex[1];
+    const ix = h.smoothedIndex[0];
+    const iy = h.smoothedIndex[1];
 
-    // Active zone: clamp to monitor aspect ratio centered at origin offset
-    // Camera viewport is [0..1] x [0..1] (normalized). Build the largest rect
-    // with this.config.aspectRatio that fits. Camera input aspect ~16:9 already.
     const camAspect = this.canvas.width / this.canvas.height || 16 / 9;
-    let zoneW = 1;
-    let zoneH = 1;
+    let zoneW = 1, zoneH = 1;
     if (this.config.aspectRatio >= camAspect) {
-      zoneW = 1;
       zoneH = camAspect / this.config.aspectRatio;
     } else {
-      zoneH = 1;
       zoneW = this.config.aspectRatio / camAspect;
     }
     const cx = 0.5 + this.originOffset.x;
     const cy = 0.5 + this.originOffset.y;
     const zx0 = cx - zoneW / 2;
     const zy0 = cy - zoneH / 2;
-
-    // Mirror X (selfie view): cursor right when hand moves right in mirror.
     const mirroredX = 1 - ix;
     const inZoneX = (mirroredX - zx0) / zoneW;
     const inZoneY = (iy - zy0) / zoneH;
 
-    if (inZoneX < 0 || inZoneX > 1 || inZoneY < 0 || inZoneY > 1) {
-      // Out of active zone -> stop motion but still emit gesture state
-      this.emitMotion("none", 0);
-      return;
-    }
+    const mirroredLandmarks: HandLandmarks =
+      lm.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z }));
 
-    // Velocity² acceleration with dead-zone, applied to delta from previous index sample.
-    let cx2 = inZoneX;
-    let cy2 = inZoneY;
-    if (this.prevIndex) {
-      const dt = Math.max(1, tNow - this.prevIndex.t) / 1000;
-      const dx = inZoneX - this.prevIndex.x;
-      const dy = inZoneY - this.prevIndex.y;
-      const speed = Math.hypot(dx, dy) / dt;
-      if (speed < this.config.deadZone) {
-        cx2 = this.cursor.x;
-        cy2 = this.cursor.y;
-      } else {
-        const accel = speed * this.config.sensitivity;
-        const gain = Math.max(1, accel); // V_cursor = V_hand² (squared via speed*sensitivity)
-        cx2 = this.cursor.x + dx * gain;
-        cy2 = this.cursor.y + dy * gain;
-      }
-    }
-    // Final cursor low-pass: clamp first, then run through One-Euro for the
-    // last bit of polish (kills any residual sub-pixel jitter under stillness).
-    const rawCx = Math.min(1, Math.max(0, cx2));
-    const rawCy = Math.min(1, Math.max(0, cy2));
-    const [smCx, smCy] = this.fCursor.filter(rawCx, rawCy, tNow);
-    // Track cursor speed for the adaptive precision-mode in applySmoothingParams.
-    if (this.prevIndex) {
-      const dtc = Math.max(0.001, (tNow - this.prevIndex.t) / 1000);
-      const instSpeed = Math.hypot(smCx - this.cursor.x, smCy - this.cursor.y) / dtc;
-      // EMA so the speed estimate doesn't flicker frame-to-frame.
-      this.cursorSpeed = this.cursorSpeed * 0.7 + instSpeed * 0.3;
-    }
-    this.cursor.x = smCx;
-    this.cursor.y = smCy;
-    this.prevIndex = { x: inZoneX, y: inZoneY, t: tNow };
-
-    // Pinch distance (3D Euclidean) on smoothed landmarks
-    const dxp = this.smoothedThumb[0] - this.smoothedIndex[0];
-    const dyp = this.smoothedThumb[1] - this.smoothedIndex[1];
-    const dzp = this.smoothedThumb[2] - this.smoothedIndex[2];
-    const pinchRaw = Math.hypot(dxp, dyp, dzp);
-    // Hand scale = SMOOTHED wrist → INDEX MCP. Filtering the reference points
-    // before dividing eliminates noise amplification near the threshold —
-    // this is what unlocks mm-level discrimination of small thumb-index gaps.
-    const handScale = Math.max(
-      0.05,
-      Math.hypot(imx - wx, imy - wy, imz - wz),
-    );
-    // pinch is now expressed as a ratio of hand size — robust at any distance.
-    const pinch = pinchRaw / handScale;
-
-    // Pinch velocity (ratio per second). Negative = fingers closing.
-    if (this.prevPinch != null && this.prevPinchT > 0) {
-      const dtp = Math.max(0.001, (tNow - this.prevPinchT) / 1000);
-      // Light EMA on velocity to filter outliers without hiding intent.
-      const instV = (pinch - this.prevPinch) / dtp;
-      this.pinchVelocity = this.pinchVelocity * 0.5 + instV * 0.5;
-    }
-    this.prevPinch = pinch;
-    this.prevPinchT = tNow;
-    // Effective threshold: when fingers are actively closing fast, lower the
-    // bar slightly so the click fires *as the user reaches* the gap — not
-    // after they've already overshot. Cap the boost so static hands don't
-    // accidentally trigger.
-    const closingBoost = this.pinchVelocity < -0.4
-      ? Math.min(0.12, Math.abs(this.pinchVelocity) * 0.06)
-      : 0;
-    const effClickThreshold = this.config.clickThreshold + closingBoost;
-
-    const pressure = Math.min(1, Math.max(0, 1 - pinch / 0.7));
-
-    // ---- Finger state detection (extended/folded) ----
-    // Index/middle/ring/pinky: tip above PIP (lower y) means extended.
+    // ---- Finger state ----
     const indexExt = indexTip.y < indexPip.y - 0.02;
     const middleExt = middleTip.y < middlePip.y - 0.02;
     const ringExt = ringTip.y < ringPip.y - 0.02;
     const pinkyExt = pinkyTip.y < pinkyPip.y - 0.02;
-    // Thumb: compare horizontal distance from wrist (handedness-aware approximation).
     const thumbIp = lm[3];
     const thumbExt = Math.hypot(thumbTip.x - wrist.x, thumbTip.y - wrist.y) >
                      Math.hypot(thumbIp.x - wrist.x, thumbIp.y - wrist.y) + 0.01;
-
     const fingersExtended: [boolean, boolean, boolean, boolean, boolean] =
       [thumbExt, indexExt, middleExt, ringExt, pinkyExt];
     const fingerCount = fingersExtended.filter(Boolean).length;
-    // MediaPipe returns mirrored handedness for selfie cam — flip it.
-    const handedness = handednessSrc === "Left" ? "Right" : handednessSrc === "Right" ? "Left" : "none";
 
-    // Three-finger pinch (thumb + index + middle close together) → right click
-    const tmPinchRaw = Math.hypot(
-      tx - mx,
-      ty - my,
-      tz - mz,
-    );
+    // Out-of-active-zone: still report pose but freeze cursor + click state.
+    if (inZoneX < 0 || inZoneX > 1 || inZoneY < 0 || inZoneY > 1) {
+      h.clickState = "IDLE";
+      h.pinchStartTs = 0;
+      h.lastScrollY = null;
+      return {
+        gesture: "none",
+        pressure: 0,
+        landmarks: mirroredLandmarks,
+        fingersExtended,
+        fingerCount,
+        pinch: 0,
+      };
+    }
+
+    // Cursor with velocity² acceleration + dead-zone.
+    let cx2 = inZoneX;
+    let cy2 = inZoneY;
+    if (h.prevIndex) {
+      const dt = Math.max(1, tNow - h.prevIndex.t) / 1000;
+      const dx = inZoneX - h.prevIndex.x;
+      const dy = inZoneY - h.prevIndex.y;
+      const speed = Math.hypot(dx, dy) / dt;
+      if (speed < this.config.deadZone) {
+        cx2 = h.cursor.x;
+        cy2 = h.cursor.y;
+      } else {
+        const accel = speed * this.config.sensitivity;
+        const gain = Math.max(1, accel);
+        cx2 = h.cursor.x + dx * gain;
+        cy2 = h.cursor.y + dy * gain;
+      }
+    }
+    const rawCx = Math.min(1, Math.max(0, cx2));
+    const rawCy = Math.min(1, Math.max(0, cy2));
+    const [smCx, smCy] = h.fCursor.filter(rawCx, rawCy, tNow);
+    if (h.prevIndex) {
+      const dtc = Math.max(0.001, (tNow - h.prevIndex.t) / 1000);
+      const instSpeed = Math.hypot(smCx - h.cursor.x, smCy - h.cursor.y) / dtc;
+      h.cursorSpeed = h.cursorSpeed * 0.7 + instSpeed * 0.3;
+    }
+    h.cursor.x = smCx;
+    h.cursor.y = smCy;
+    h.prevIndex = { x: inZoneX, y: inZoneY, t: tNow };
+
+    // Pinch ratio.
+    const dxp = h.smoothedThumb[0] - h.smoothedIndex[0];
+    const dyp = h.smoothedThumb[1] - h.smoothedIndex[1];
+    const dzp = h.smoothedThumb[2] - h.smoothedIndex[2];
+    const pinchRaw = Math.hypot(dxp, dyp, dzp);
+    const handScale = Math.max(0.05, Math.hypot(imx - wx, imy - wy, imz - wz));
+    const pinch = pinchRaw / handScale;
+
+    if (h.prevPinch != null && h.prevPinchT > 0) {
+      const dtp = Math.max(0.001, (tNow - h.prevPinchT) / 1000);
+      const instV = (pinch - h.prevPinch) / dtp;
+      h.pinchVelocity = h.pinchVelocity * 0.5 + instV * 0.5;
+    }
+    h.prevPinch = pinch;
+    h.prevPinchT = tNow;
+    const closingBoost = h.pinchVelocity < -0.4
+      ? Math.min(0.12, Math.abs(h.pinchVelocity) * 0.06)
+      : 0;
+    const effClickThreshold = this.config.clickThreshold + closingBoost;
+    const pressure = Math.min(1, Math.max(0, 1 - pinch / 0.7));
+
+    // Three-finger pinch (right click).
+    const tmPinchRaw = Math.hypot(tx - mx, ty - my, tz - mz);
     const tmPinch = tmPinchRaw / handScale;
 
     const scrollMode = indexExt && middleExt && !thumbExt && !ringExt && !pinkyExt;
     const isFist = !indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt;
     const isOpenPalm = fingerCount === 5;
-    // Palm direction: cross product of (indexMcp - wrist) × (pinkyMcp - wrist)
-    // tells us palm-normal orientation. Sign of z (in image-space) flips
-    // between palm-facing-camera and back-facing-camera. Handedness (after
-    // selfie-mirror correction) determines which sign means "palm front".
     let palmFacing: "front" | "back" | "unknown" = "unknown";
     if (isOpenPalm) {
       const pinkyMcp = lm[17];
@@ -620,11 +606,8 @@ export class GestureEngine {
       const bx = pinkyMcp.x - wrist.x;
       const by = pinkyMcp.y - wrist.y;
       const crossZ = ax * by - ay * bx;
-      // Mirrored selfie cam: right-hand palm-toward-camera → crossZ > 0,
-      // left-hand palm-toward-camera → crossZ < 0.
       if (handedness === "Right") palmFacing = crossZ > 0 ? "front" : "back";
-      else if (handedness === "Left") palmFacing = crossZ < 0 ? "front" : "back";
-      else palmFacing = crossZ > 0 ? "front" : "back";
+      else palmFacing = crossZ < 0 ? "front" : "back";
     }
     const isThumbsUp = thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt;
     const isPinkyOnly = pinkyExt && !indexExt && !middleExt && !ringExt && !thumbExt;
@@ -640,133 +623,89 @@ export class GestureEngine {
     const isThreePinch = pinch < effClickThreshold &&
                          tmPinch < effClickThreshold * 1.4 &&
                          indexExt && middleExt;
-
-    let gesture: GestureKind = "none";
-
-    // Pinch-as-click takes priority over static pose detection. Whenever the
-    // thumb + index tips come within the click threshold, treat it as a click
-    // regardless of whether the other fingers are curled (which would
-    // otherwise be misclassified as "fist") or extended.
     const isPinchClick = pinch < effClickThreshold && !isThreePinch;
 
+    let gesture: GestureKind = "none";
     if (isPinchClick) {
-      // Run the click/drag state machine directly so pinch behaves like a
-      // real mouse button — quick pinch = click, sustained = drag.
-      this.lastScrollY = null;
-      if (this.clickState === "IDLE") {
-        if (this.pinchStartTs === 0) this.pinchStartTs = tNow;
-        if (tNow - this.pinchStartTs >= this.debounceMs) {
-          this.clickState = "CLICK_DOWN";
+      h.lastScrollY = null;
+      if (h.clickState === "IDLE") {
+        if (h.pinchStartTs === 0) h.pinchStartTs = tNow;
+        if (tNow - h.pinchStartTs >= this.debounceMs) {
+          h.clickState = "CLICK_DOWN";
           gesture = "click";
         }
-      } else if (this.clickState === "CLICK_DOWN") {
+      } else if (h.clickState === "CLICK_DOWN") {
         gesture = "drag";
-        this.clickState = "DRAG";
-      } else if (this.clickState === "DRAG") {
+        h.clickState = "DRAG";
+      } else if (h.clickState === "DRAG") {
         gesture = "drag";
       }
     } else if (isFist) {
-      gesture = "fist";
-      this.clickState = "IDLE";
-      this.pinchStartTs = 0;
-      this.lastScrollY = null;
+      gesture = "fist"; h.clickState = "IDLE"; h.pinchStartTs = 0; h.lastScrollY = null;
     } else if (isOpenPalm) {
       gesture = palmFacing === "back" ? "palm_back" : "open_palm";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isThumbsUp) {
-      gesture = "thumbs_up";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "thumbs_up"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isPinkyOnly) {
-      gesture = "pinky_only";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "pinky_only"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isFourFingers) {
-      gesture = "four_fingers";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "four_fingers"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isPhoneCall) {
-      gesture = "phone_call";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "phone_call"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isRock) {
-      gesture = "rock";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "rock"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isThreeFingers) {
-      gesture = "three_fingers";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "three_fingers"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isPeace) {
-      gesture = "peace";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "peace"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isTwoFingerPoint) {
-      gesture = "two_finger_point";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "two_finger_point"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isMiddleOnly) {
-      gesture = "middle_only";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "middle_only"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isRingOnly) {
-      gesture = "ring_only";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "ring_only"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (isThreePinch) {
-      gesture = "right_click";
-      this.clickState = "IDLE";
-      this.lastScrollY = null;
+      gesture = "right_click"; h.clickState = "IDLE"; h.lastScrollY = null;
     } else if (scrollMode) {
-      // Scroll: vertical delta of index tip
-      if (this.lastScrollY != null) {
-        const sdy = iy - this.lastScrollY;
-        if (Math.abs(sdy) > 0.003 && tNow - this.lastScrollEmit >= this.scrollMinIntervalMs) {
+      if (h.lastScrollY != null) {
+        const sdy = iy - h.lastScrollY;
+        if (Math.abs(sdy) > 0.003 && tNow - h.lastScrollEmit >= this.scrollMinIntervalMs) {
           gesture = sdy < 0 ? "scroll_up" : "scroll_down";
-          this.lastScrollEmit = tNow;
+          h.lastScrollEmit = tNow;
         }
       }
-      this.lastScrollY = iy;
-      this.clickState = "IDLE";
+      h.lastScrollY = iy;
+      h.clickState = "IDLE";
     } else {
-      this.lastScrollY = null;
-      // Click / drag state machine with hysteresis + debounce
-      if (this.clickState === "IDLE") {
+      h.lastScrollY = null;
+      if (h.clickState === "IDLE") {
         if (pinch < effClickThreshold) {
-          if (this.pinchStartTs === 0) this.pinchStartTs = tNow;
-          if (tNow - this.pinchStartTs >= this.debounceMs) {
-            this.clickState = "CLICK_DOWN";
+          if (h.pinchStartTs === 0) h.pinchStartTs = tNow;
+          if (tNow - h.pinchStartTs >= this.debounceMs) {
+            h.clickState = "CLICK_DOWN";
             gesture = "click";
           }
         } else {
-          this.pinchStartTs = 0;
+          h.pinchStartTs = 0;
           if (isPointing) gesture = "point";
         }
-      } else if (this.clickState === "CLICK_DOWN") {
+      } else if (h.clickState === "CLICK_DOWN") {
         if (pinch >= this.config.releaseThreshold) {
-          this.clickState = "IDLE";
-          this.pinchStartTs = 0;
-          gesture = "none";
+          h.clickState = "IDLE"; h.pinchStartTs = 0; gesture = "none";
         } else {
-          // Sustained pinch -> drag
-          gesture = "drag";
-          this.clickState = "DRAG";
+          gesture = "drag"; h.clickState = "DRAG";
         }
-      } else if (this.clickState === "DRAG") {
+      } else if (h.clickState === "DRAG") {
         if (pinch >= this.config.releaseThreshold) {
-          this.clickState = "IDLE";
-          this.pinchStartTs = 0;
-          gesture = "none";
+          h.clickState = "IDLE"; h.pinchStartTs = 0; gesture = "none";
         } else {
           gesture = "drag";
         }
       }
     }
 
-    // Gesture stability voting — keep the same gesture for N frames before
-    // committing it. Pointer/click/drag/scroll are time-critical and bypass
-    // voting; static poses (open_palm/thumbs_up/etc) get the full vote.
+    // Static-pose stability voting (per hand).
     const isStaticPose =
       gesture === "open_palm" || gesture === "palm_back" || gesture === "thumbs_up" ||
       gesture === "pinky_only" || gesture === "four_fingers" ||
@@ -777,47 +716,35 @@ export class GestureEngine {
       gesture === "right_click";
     let committed: GestureKind = gesture;
     if (isStaticPose) {
-      if (gesture === this.gestureCandidate) {
-        this.gestureCandidateCount++;
-      } else {
-        this.gestureCandidate = gesture;
-        this.gestureCandidateCount = 1;
+      if (gesture === h.gestureCandidate) h.gestureCandidateCount++;
+      else { h.gestureCandidate = gesture; h.gestureCandidateCount = 1; }
+      if (h.gestureCandidateCount >= this.gestureStabilityFrames) {
+        h.committedGesture = gesture;
       }
-      if (this.gestureCandidateCount >= this.gestureStabilityFrames) {
-        this.committedGesture = gesture;
-      }
-      committed = this.committedGesture === gesture ? gesture : "none";
+      committed = h.committedGesture === gesture ? gesture : "none";
     } else {
-      this.gestureCandidate = gesture;
-      this.gestureCandidateCount = 0;
-      this.committedGesture = gesture;
+      h.gestureCandidate = gesture;
+      h.gestureCandidateCount = 0;
+      h.committedGesture = gesture;
       committed = gesture;
     }
 
-    // Mirrored normalized landmarks for live overlay (selfie view).
-    const mirroredLandmarks = lm.map((p) => ({ x: 1 - p.x, y: p.y, z: p.z }));
-
-    TelemetryStore.set({
-      cursorX: this.cursor.x,
-      cursorY: this.cursor.y,
+    return {
       gesture: committed,
-      handPresent: true,
-      handedness,
+      pressure,
+      landmarks: mirroredLandmarks,
       fingersExtended,
       fingerCount,
-      pinchDistance: pinch,
-      landmarks: mirroredLandmarks,
-    });
-
-    this.emitMotion(committed, pressure);
+      pinch,
+    };
   }
 
-  private emitMotion(gesture: GestureKind, pressure: number) {
+  private emitMotion(h: HandState, gesture: GestureKind, pressure: number) {
     this.bridge.send({
       event: "motion",
       data: {
-        x: this.cursor.x,
-        y: this.cursor.y,
+        x: h.cursor.x,
+        y: h.cursor.y,
         pressure,
         gesture,
       },
