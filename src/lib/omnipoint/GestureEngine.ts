@@ -289,19 +289,55 @@ export class GestureEngine {
 
     let confidence = 0;
     if (result.landmarks.length > 0) {
-      // Pick the most-confident hand as the controller (handedness score is
-      // MediaPipe's per-hand confidence). This way the user can use either
-      // hand and the system always tracks the strongest signal.
+      // Dual-hand support: pick whichever hand is most *actively* gesturing
+      // as the controller for this frame. This lets the user switch hands
+      // freely (or use either one) — the stronger-intent hand wins every
+      // frame. "Intent" = pinch close, a clear pointing pose, or an active
+      // static pose; falls back to MediaPipe handedness confidence.
       let bestIdx = 0;
-      let bestScore = result.handedness?.[0]?.[0]?.score ?? 0;
-      for (let i = 1; i < result.landmarks.length; i++) {
-        const s = result.handedness?.[i]?.[0]?.score ?? 0;
-        if (s > bestScore) {
-          bestScore = s;
+      let bestIntent = -Infinity;
+      for (let i = 0; i < result.landmarks.length; i++) {
+        const lm = result.landmarks[i];
+        const score = result.handedness?.[i]?.[0]?.score ?? 0;
+        // Pinch ratio (thumb-tip ↔ index-tip over hand scale)
+        const dt = lm[4], di = lm[8], mcp = lm[5], wr = lm[0];
+        const pinchRaw = Math.hypot(dt.x - di.x, dt.y - di.y, dt.z - di.z);
+        const scale = Math.max(
+          0.05,
+          Math.hypot(mcp.x - wr.x, mcp.y - wr.y, mcp.z - wr.z),
+        );
+        const pinch = pinchRaw / scale;
+        // Finger-extended crude count (reused intent signal)
+        const idxExt = lm[8].y < lm[6].y - 0.02 ? 1 : 0;
+        const midExt = lm[12].y < lm[10].y - 0.02 ? 1 : 0;
+        const ringExt = lm[16].y < lm[14].y - 0.02 ? 1 : 0;
+        const pinkyExt = lm[20].y < lm[18].y - 0.02 ? 1 : 0;
+        const fingers = idxExt + midExt + ringExt + pinkyExt;
+        // Stronger intent when pinching, or when showing a clean pose.
+        const pinchIntent = Math.max(0, 1 - pinch / 0.8); // 0..~1
+        const poseIntent = fingers === 1 || fingers === 4 || fingers === 0 ? 0.4 : 0.15;
+        const intent = pinchIntent * 1.2 + poseIntent + score * 0.3;
+        if (intent > bestIntent) {
+          bestIntent = intent;
           bestIdx = i;
         }
       }
-      confidence = bestScore || 0.8;
+      // Reset landmark filters when switching controller hand so the new
+      // hand doesn't inherit the previous hand's smoothing history (which
+      // would cause a visible cursor jump / false pinch).
+      if ((this as unknown as { _lastCtrlIdx?: number })._lastCtrlIdx !== bestIdx) {
+        this.fThumb.reset();
+        this.fIndex.reset();
+        this.fIndexMcp.reset();
+        this.fWrist.reset();
+        this.fMiddleTip.reset();
+        this.fCursor.reset();
+        this.prevIndex = null;
+        this.prevPinch = null;
+        this.prevPinchT = 0;
+        (this as unknown as { _lastCtrlIdx?: number })._lastCtrlIdx = bestIdx;
+      }
+      confidence = result.handedness?.[bestIdx]?.[0]?.score ?? 0.8;
       this.processLandmarks(result, tNow, bestIdx);
     } else {
       confidence = 0;
