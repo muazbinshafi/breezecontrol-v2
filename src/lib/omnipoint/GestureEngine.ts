@@ -537,6 +537,24 @@ export class GestureEngine {
     const scrollMode = indexExt && middleExt && !thumbExt && !ringExt && !pinkyExt;
     const isFist = !indexExt && !middleExt && !ringExt && !pinkyExt && !thumbExt;
     const isOpenPalm = fingerCount === 5;
+    // Palm direction: cross product of (indexMcp - wrist) × (pinkyMcp - wrist)
+    // tells us palm-normal orientation. Sign of z (in image-space) flips
+    // between palm-facing-camera and back-facing-camera. Handedness (after
+    // selfie-mirror correction) determines which sign means "palm front".
+    let palmFacing: "front" | "back" | "unknown" = "unknown";
+    if (isOpenPalm) {
+      const pinkyMcp = lm[17];
+      const ax = lm[5].x - wrist.x;
+      const ay = lm[5].y - wrist.y;
+      const bx = pinkyMcp.x - wrist.x;
+      const by = pinkyMcp.y - wrist.y;
+      const crossZ = ax * by - ay * bx;
+      // Mirrored selfie cam: right-hand palm-toward-camera → crossZ > 0,
+      // left-hand palm-toward-camera → crossZ < 0.
+      if (handedness === "Right") palmFacing = crossZ > 0 ? "front" : "back";
+      else if (handedness === "Left") palmFacing = crossZ < 0 ? "front" : "back";
+      else palmFacing = crossZ > 0 ? "front" : "back";
+    }
     const isThumbsUp = thumbExt && !indexExt && !middleExt && !ringExt && !pinkyExt;
     const isPinkyOnly = pinkyExt && !indexExt && !middleExt && !ringExt && !thumbExt;
     const isFourFingers = indexExt && middleExt && ringExt && pinkyExt && !thumbExt;
@@ -582,7 +600,7 @@ export class GestureEngine {
       this.pinchStartTs = 0;
       this.lastScrollY = null;
     } else if (isOpenPalm) {
-      gesture = "open_palm";
+      gesture = palmFacing === "back" ? "palm_back" : "open_palm";
       this.clickState = "IDLE";
       this.lastScrollY = null;
     } else if (isThumbsUp) {
@@ -679,7 +697,7 @@ export class GestureEngine {
     // committing it. Pointer/click/drag/scroll are time-critical and bypass
     // voting; static poses (open_palm/thumbs_up/etc) get the full vote.
     const isStaticPose =
-      gesture === "open_palm" || gesture === "thumbs_up" ||
+      gesture === "open_palm" || gesture === "palm_back" || gesture === "thumbs_up" ||
       gesture === "pinky_only" || gesture === "four_fingers" ||
       gesture === "fist" || gesture === "middle_only" ||
       gesture === "ring_only" || gesture === "two_finger_point" ||

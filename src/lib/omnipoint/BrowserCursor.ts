@@ -76,6 +76,15 @@ export class BrowserCursor {
   // Spray throttle.
   private lastSprayAt = 0;
 
+  // Fist-grab state. When the user makes a fist we begin a grab:
+  //  - pointer mode: synthesize a left-button mousedown at the cursor and
+  //    keep it pressed while fist is held; release on un-fist.
+  //  - draw mode: move the active selection rectangle (or, if none, build
+  //    a 200×200 floating selection around the cursor) while fist is held.
+  private fistActive = false;
+  private fistStartedAt = 0;
+  private fistDrawAnchor: DrawSegment | null = null;
+
   // Pose-hold buffer for higher accuracy on static gestures. Tracks the
   // currently-held configurable gesture, when it started, and when it last
   // fired (per gesture). A pose must be sustained for `holdMs` and clear
@@ -959,6 +968,58 @@ export class BrowserCursor {
     this.setRingState(g);
 
     if (this.mode === "draw") {
+      // Fist-as-grab in draw mode: if a selection rect already exists, drag
+      // it; otherwise spawn a 200×200 floating selection around the cursor
+      // and drag that. Releasing the fist drops the selection in place.
+      if (g === "fist") {
+        if (!this.fistActive) {
+          this.fistActive = true;
+          this.fistStartedAt = performance.now();
+          if (!this.selectRect || !this.selectImg) {
+            // Build an instant 200×200 floating selection around cursor.
+            const W = 200, H = 200;
+            const sx = Math.max(0, x - W / 2);
+            const sy = Math.max(0, y - H / 2);
+            if (this.drawCtx) {
+              const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+              const snapImg = this.snapshotCanvas();
+              if (snapImg) PaintHistory.push(snapImg);
+              this.selectBase = snapImg;
+              this.selectImg = this.drawCtx.getImageData(
+                Math.floor(sx * dpr), Math.floor(sy * dpr),
+                Math.floor(W * dpr), Math.floor(H * dpr),
+              );
+              // Erase the source region so it visibly "lifts" with the grab.
+              this.drawCtx.clearRect(sx, sy, W, H);
+              this.selectBase = this.snapshotCanvas();
+              this.selectRect = { x: sx, y: sy, w: W, h: H };
+            }
+          }
+          this.fistDrawAnchor = this.selectRect
+            ? { x: x - this.selectRect.x, y: y - this.selectRect.y }
+            : { x: 0, y: 0 };
+        }
+        if (this.selectRect && this.fistDrawAnchor) {
+          this.selectRect.x = x - this.fistDrawAnchor.x;
+          this.selectRect.y = y - this.fistDrawAnchor.y;
+          this.renderSelectionWithHandles();
+        }
+        this.setLabel("GRAB · MOVE");
+        this.lastGesture = g;
+        return;
+      } else if (this.fistActive) {
+        // Fist released — bake the floating selection into the canvas.
+        this.fistActive = false;
+        this.fistDrawAnchor = null;
+        if (this.selectRect && this.selectImg) {
+          this.renderSelectionWithHandles();
+          this.selectBase = this.snapshotCanvas();
+          this.selectRect = null;
+          this.selectImg = null;
+        }
+        this.setLabel("DROP");
+      }
+
       // Draw mode must react immediately to a real pinch. The previous
       // version used the normalized pinch ratio as a fallback; keep that
       // behavior so drawing still works when the engine commits a brief
@@ -1229,11 +1290,32 @@ export class BrowserCursor {
     const now = performance.now();
     const transitionedTo = (k: GestureKind) => g === k && this.lastGesture !== k;
 
+    // Fist-as-grab: while a fist is held, hold the left mouse button down
+    // so the user can drag whatever the cursor is over (selections, files,
+    // windows, list items). Release on un-fist.
+    if (g === "fist" && !this.fistActive) {
+      // Ensure any pinch-drag state is released first
+      if (this.isDown) {
+        this.dispatchUp(this.lastTarget);
+        this.isDown = false;
+      }
+      this.dispatchDown(target, x, y);
+      this.isDown = true;
+      this.fistActive = true;
+      this.fistStartedAt = now;
+      this.setLabel("GRAB");
+    } else if (g !== "fist" && this.fistActive) {
+      this.dispatchUp(this.lastTarget);
+      this.isDown = false;
+      this.fistActive = false;
+      this.setLabel("RELEASE");
+    }
+
     if (g === "drag" && !this.isDown) {
       this.dispatchDown(target, x, y);
       this.isDown = true;
       this.setLabel("DRAG");
-    } else if (this.isDown && g !== "drag") {
+    } else if (this.isDown && g !== "drag" && !this.fistActive) {
       this.dispatchUp(target);
       this.dispatchClick(target, x, y);
       this.isDown = false;
@@ -1256,8 +1338,6 @@ export class BrowserCursor {
       this.dispatchWheel(target, x, y, delta);
       this.lastScrollAt = now;
       this.setLabel(g === "scroll_up" ? "SCROLL ↑" : "SCROLL ↓");
-    } else if (g === "fist") {
-      this.setLabel("HOLD");
     } else if (g === "point") {
       this.setLabel("");
     } else if (g === "none") {

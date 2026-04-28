@@ -53,6 +53,7 @@ const ACTIONS: GestureAction[] = [
 
 const GESTURES: ConfigurableGesture[] = [
   "open_palm",
+  "palm_back",
   "thumbs_up",
   "pinky_only",
   "four_fingers",
