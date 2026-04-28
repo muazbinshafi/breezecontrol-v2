@@ -590,8 +590,13 @@ export class GestureEngine {
       const instSpeed = Math.hypot(smCx - h.cursor.x, smCy - h.cursor.y) / dtc;
       h.cursorSpeed = h.cursorSpeed * 0.7 + instSpeed * 0.3;
     }
-    h.cursor.x = smCx;
-    h.cursor.y = smCy;
+    // We DEFER committing the cursor update until we know the pose.
+    // Per spec, cursor only moves when:
+    //   - index is extended (pointing / drawing-pinch / scroll)
+    //   - OR a fist is held (grab-drag) so user can drag things around
+    // For any other pose (open palm, thumbs up, peace, etc.), the cursor
+    // FREEZES so static shortcut poses don't slide the pointer around.
+    const pendingCursor = { x: smCx, y: smCy };
     h.prevIndex = { x: inZoneX, y: inZoneY, t: tNow };
 
     // Pinch ratio.
@@ -648,6 +653,37 @@ export class GestureEngine {
                          tmPinch < effClickThreshold * 1.4 &&
                          indexExt && middleExt;
     const isPinchClick = pinch < effClickThreshold && !isThreePinch;
+
+    // ===== Cursor-motion gate (per user spec) =====
+    // Move only when intentionally pointing, pinching, scrolling, or fisted.
+    // This prevents the cursor from sliding while the user holds open-palm
+    // (undo) or other static shortcut poses.
+    const cursorAllowed =
+      isPointing || isPinchClick || isThreePinch || scrollMode || isFist;
+    if (cursorAllowed) {
+      h.cursor.x = pendingCursor.x;
+      h.cursor.y = pendingCursor.y;
+    }
+    // ===== Fist exclusivity =====
+    // While a fist is held, no other gesture should fire. Return the fist
+    // gesture immediately so BrowserCursor can run its grab-drag loop and
+    // every other detection (palm/peace/pinch) is suppressed on this hand.
+    if (isFist) {
+      h.clickState = "IDLE";
+      h.pinchStartTs = 0;
+      h.lastScrollY = null;
+      h.gestureCandidate = "fist";
+      h.gestureCandidateCount = Math.max(h.gestureCandidateCount + 1, this.gestureStabilityFrames);
+      h.committedGesture = "fist";
+      return {
+        gesture: "fist",
+        pressure: 0,
+        landmarks: mirroredLandmarks,
+        fingersExtended,
+        fingerCount,
+        pinch,
+      };
+    }
 
     let gesture: GestureKind = "none";
     if (isPinchClick) {
