@@ -12,6 +12,7 @@ export type GestureKind =
   | "scroll_down"
   | "thumbs_up"
   | "open_palm"
+  | "palm_back"
   | "fist"
   | "pinky_only"
   | "four_fingers"
