@@ -51,6 +51,61 @@ const HAND_CONNECTIONS: [number, number][] = [
 
 type ClickState = "IDLE" | "CLICK_DOWN" | "DRAG";
 
+/**
+ * Per-hand state. Both hands are tracked simultaneously; each owns its own
+ * filters, click state machine, scroll/pinch history, and cursor target so
+ * they never step on each other. Whichever hand has stronger intent on any
+ * given frame drives the OS cursor — the other hand can still fire a click
+ * or scroll independently.
+ */
+class HandState {
+  fThumb = new OneEuroFilter3D(1.4, 0.05);
+  fIndex = new OneEuroFilter3D(1.4, 0.05);
+  fIndexMcp = new OneEuroFilter3D(1.2, 0.04);
+  fWrist = new OneEuroFilter3D(1.2, 0.04);
+  fMiddleTip = new OneEuroFilter3D(1.4, 0.05);
+  fCursor = new OneEuroFilter2D(2.0, 0.03);
+  smoothedThumb: [number, number, number] | null = null;
+  smoothedIndex: [number, number, number] | null = null;
+  prevPinch: number | null = null;
+  prevPinchT = 0;
+  pinchVelocity = 0;
+  cursorSpeed = 0;
+  cursor = { x: 0.5, y: 0.5 };
+  prevIndex: { x: number; y: number; t: number } | null = null;
+  clickState: ClickState = "IDLE";
+  pinchStartTs = 0;
+  gestureCandidate: GestureKind = "none";
+  gestureCandidateCount = 0;
+  committedGesture: GestureKind = "none";
+  lastScrollY: number | null = null;
+  lastScrollEmit = 0;
+  // Last frame where this hand was visible — used to expire stale state.
+  lastSeenAt = 0;
+
+  reset() {
+    this.fThumb.reset();
+    this.fIndex.reset();
+    this.fIndexMcp.reset();
+    this.fWrist.reset();
+    this.fMiddleTip.reset();
+    this.fCursor.reset();
+    this.smoothedThumb = null;
+    this.smoothedIndex = null;
+    this.prevPinch = null;
+    this.prevPinchT = 0;
+    this.pinchVelocity = 0;
+    this.cursorSpeed = 0;
+    this.prevIndex = null;
+    this.clickState = "IDLE";
+    this.pinchStartTs = 0;
+    this.gestureCandidate = "none";
+    this.gestureCandidateCount = 0;
+    this.committedGesture = "none";
+    this.lastScrollY = null;
+  }
+}
+
 export class GestureEngine {
   private landmarker: HandLandmarker | null = null;
   private video: HTMLVideoElement;
@@ -59,48 +114,24 @@ export class GestureEngine {
   private bridge: HIDBridge;
   public config: EngineConfig;
 
-  // One-Euro filters for jitter-free thumb / index landmarks (3D each).
-  // Lower minCutoff + higher beta = preserves micro-motion of fingertips
-  // (critical for sub-cm pinch precision) while still killing static jitter.
-  private fThumb = new OneEuroFilter3D(1.4, 0.05);
-  private fIndex = new OneEuroFilter3D(1.4, 0.05);
-  // Extra landmarks we filter so the on-screen skeleton is rock-steady too.
-  private fIndexMcp = new OneEuroFilter3D(1.2, 0.04);
-  private fWrist = new OneEuroFilter3D(1.2, 0.04);
-  private fMiddleTip = new OneEuroFilter3D(1.4, 0.05);
-  private smoothedThumb: [number, number, number] | null = null;
-  private smoothedIndex: [number, number, number] | null = null;
-  // Final cursor low-pass (after acceleration). Slightly snappier than landmarks.
-  private fCursor = new OneEuroFilter2D(2.0, 0.03);
-  // Pinch ratio history for velocity-based "closing intent" detection.
-  private prevPinch: number | null = null;
-  private prevPinchT = 0;
-  private pinchVelocity = 0;
-  // Cursor speed (in normalized units / sec) — drives precision-mode boost.
-  private cursorSpeed = 0;
-
-  // Cursor state (smoothed, post-acceleration), normalized to active zone 0..1
-  private cursor = { x: 0.5, y: 0.5 };
-  private prevIndex: { x: number; y: number; t: number } | null = null;
+  // Per-hand state, keyed by handedness ("Left" | "Right"). Both hands run
+  // through the full pipeline simultaneously; each frame we pick a "primary"
+  // hand to drive the OS cursor based on which has stronger intent, but the
+  // OTHER hand still runs its click/scroll state machine — so e.g. you can
+  // be moving the cursor with the right hand and tap a click with the left.
+  private hands: Map<"Left" | "Right", HandState> = new Map();
+  // Identity of the hand that drove the cursor last frame — used so the
+  // primary-hand selection doesn't flicker frame-to-frame when both hands
+  // have similar intent scores.
+  private lastPrimary: "Left" | "Right" | null = null;
 
   // Active zone center (set via Set Origin)
   private originOffset = { x: 0, y: 0 };
 
-  // Click state machine
-  private clickState: ClickState = "IDLE";
-  private pinchStartTs = 0;
   private readonly debounceMs = 25;
 
-  // Gesture stability voting — require N consecutive frames of the same
-  // candidate gesture before committing. Eliminates 1-frame flickers.
-  private gestureCandidate: GestureKind = "none";
-  private gestureCandidateCount = 0;
-  private committedGesture: GestureKind = "none";
   private readonly gestureStabilityFrames = 3;
 
-  // Scroll state
-  private lastScrollY: number | null = null;
-  private lastScrollEmit = 0;
   private readonly scrollMinIntervalMs = 1000 / 120;
 
   // FPS / latency
