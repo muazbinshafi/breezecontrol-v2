@@ -1288,8 +1288,21 @@ export class BrowserCursor {
     if (surface === "draw" && !settings.enableDrawStaticActions) return false;
 
     if (!isConfigurable(g)) {
-      this.poseHeld = null;
-      this.poseHeldSince = 0;
+      // Grace window: a single-frame "none" flicker between stable static
+      // poses should NOT reset the hold timer. Keep the held pose alive
+      // for up to 180ms after the last sighting. This is what makes the
+      // customization reliable — previously any flicker restarted holdMs
+      // and the user's binding could never accumulate enough hold time.
+      const now2 = performance.now();
+      if (
+        this.poseHeld &&
+        this.poseHeldLastSeen > 0 &&
+        now2 - this.poseHeldLastSeen > 180
+      ) {
+        this.poseHeld = null;
+        this.poseHeldSince = 0;
+        this.poseHeldLastSeen = 0;
+      }
       return false;
     }
     const binding = settings.bindings[g];
@@ -1302,8 +1315,10 @@ export class BrowserCursor {
     if (this.poseHeld !== g) {
       this.poseHeld = g;
       this.poseHeldSince = now;
+      this.poseHeldLastSeen = now;
       return false;
     }
+    this.poseHeldLastSeen = now;
 
     const requiredHold = binding.holdMs * settings.accuracyBias;
     if (now - this.poseHeldSince < requiredHold) return false;
