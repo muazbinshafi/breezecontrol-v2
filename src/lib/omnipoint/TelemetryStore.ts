@@ -33,6 +33,26 @@ export type FingerStates = [boolean, boolean, boolean, boolean, boolean];
 // (selfie) camera space. Empty array = no hand.
 export type HandLandmarks = { x: number; y: number; z: number }[];
 
+/**
+ * Per-hand debug snapshot — one entry per hand MediaPipe detected this frame.
+ * Used by the dual-hand debug overlay and the camera setup check to surface
+ * raw detection counts, confidences and on-screen positions.
+ */
+export interface HandDebugInfo {
+  /** Raw detection slot index from MediaPipe (0 or 1). */
+  index: number;
+  /** Resolved (selfie-mirrored) handedness shown to the user. */
+  side: "Left" | "Right";
+  /** Handedness classifier confidence in [0..1]. */
+  confidence: number;
+  /** Wrist position in mirrored normalized camera space. */
+  wrist: { x: number; y: number };
+  /** Hand bounding box in mirrored normalized camera space. */
+  bbox: { x: number; y: number; w: number; h: number };
+  /** True when this hand drove the OS cursor this frame. */
+  isPrimary: boolean;
+}
+
 export interface TelemetrySnapshot {
   fps: number;
   inferenceMs: number;
@@ -69,6 +89,26 @@ export interface TelemetrySnapshot {
     uinput?: boolean;
     evdev?: boolean;
   } | null;
+  /** Number of hands MediaPipe returned this frame (0, 1 or 2). */
+  handsDetected: number;
+  /** Per-hand debug snapshots, ordered by detection slot. */
+  handsDebug: HandDebugInfo[];
+  /**
+   * Bridge connection diagnostic for the UI banner. `code` is one of:
+   *  - "ok"             — connected
+   *  - "idle"           — not in bridge mode
+   *  - "connecting"     — first attempt in flight
+   *  - "retrying"       — auto-reconnect scheduled
+   *  - "refused"        — daemon not running / port closed
+   *  - "timeout"        — opened but no response
+   *  - "invalid_url"    — URL malformed
+   */
+  bridgeError: {
+    code: "ok" | "idle" | "connecting" | "retrying" | "refused" | "timeout" | "invalid_url";
+    message: string;
+    nextRetryMs?: number;
+    attempt?: number;
+  };
 }
 
 const initial: TelemetrySnapshot = {
@@ -96,6 +136,9 @@ const initial: TelemetrySnapshot = {
   landmarks: [],
   precisionMode: false,
   daemon: null,
+  handsDetected: 0,
+  handsDebug: [],
+  bridgeError: { code: "idle", message: "Bridge not active" },
 };
 
 let snapshot: TelemetrySnapshot = { ...initial };

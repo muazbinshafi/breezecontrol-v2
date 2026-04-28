@@ -8,7 +8,7 @@ import {
   FilesetResolver,
   type HandLandmarkerResult,
 } from "@mediapipe/tasks-vision";
-import { TelemetryStore, type GestureKind, type HandLandmarks } from "./TelemetryStore";
+import { TelemetryStore, type GestureKind, type HandLandmarks, type HandDebugInfo } from "./TelemetryStore";
 import type { HIDBridge } from "./HIDBridge";
 import { OneEuroFilter2D, OneEuroFilter3D } from "./OneEuroFilter";
 
@@ -320,6 +320,7 @@ export class GestureEngine {
         fingersExtended: [boolean, boolean, boolean, boolean, boolean];
         fingerCount: number;
         pinch: number;
+        rawIndex: number;
       }[] = [];
 
       for (let i = 0; i < result.landmarks.length; i++) {
@@ -361,6 +362,7 @@ export class GestureEngine {
           fingersExtended: out.fingersExtended,
           fingerCount: out.fingerCount,
           pinch: out.pinch,
+          rawIndex: i,
         });
       }
 
@@ -409,6 +411,25 @@ export class GestureEngine {
         for (const p of perHand) {
           for (const pt of p.landmarks) allLandmarks.push(pt);
         }
+        // Build per-hand debug snapshots for the dual-hand overlay.
+        const handsDebug: HandDebugInfo[] = perHand.map((p) => {
+          let minX = 1, minY = 1, maxX = 0, maxY = 0;
+          for (const pt of p.landmarks) {
+            if (pt.x < minX) minX = pt.x;
+            if (pt.y < minY) minY = pt.y;
+            if (pt.x > maxX) maxX = pt.x;
+            if (pt.y > maxY) maxY = pt.y;
+          }
+          const wristPt = p.landmarks[0] ?? { x: 0.5, y: 0.5 };
+          return {
+            index: p.rawIndex,
+            side: p.side,
+            confidence: p.score,
+            wrist: { x: wristPt.x, y: wristPt.y },
+            bbox: { x: minX, y: minY, w: Math.max(0, maxX - minX), h: Math.max(0, maxY - minY) },
+            isPrimary: p.side === primary.side,
+          };
+        });
         TelemetryStore.set({
           cursorX: primary.h.cursor.x,
           cursorY: primary.h.cursor.y,
@@ -420,6 +441,8 @@ export class GestureEngine {
           pinchDistance: primary.pinch,
           landmarks: allLandmarks,
           precisionMode: primary.h.cursorSpeed < 0.05,
+          handsDetected: perHand.length,
+          handsDebug,
         });
       }
     } else {
@@ -436,6 +459,8 @@ export class GestureEngine {
         gesture: "none",
         landmarks: [],
         precisionMode: false,
+        handsDetected: 0,
+        handsDebug: [],
       });
     }
 

@@ -49,11 +49,11 @@ export class HIDBridge {
   private url: string;
   private backoff = 250;
   private readonly backoffMax = 8000;
-  private readonly maxReconnectAttempts = 8;
   private reconnectAttempts = 0;
   private heartbeatTimer: number | null = null;
   private heartbeatPendingSince = 0;
   private reconnectTimer: number | null = null;
+  private lastErrorCode: "refused" | "timeout" | "invalid_url" | null = null;
   private packetCounter = 0;
   private packetWindowStart = performance.now();
   private stopped = false;
@@ -82,7 +82,11 @@ export class HIDBridge {
 
   emergencyStop() {
     this.stopped = true;
-    TelemetryStore.set({ wsState: "stopped", emergencyStop: true });
+    TelemetryStore.set({
+      wsState: "stopped",
+      emergencyStop: true,
+      bridgeError: { code: "idle", message: "Bridge stopped" },
+    });
     BridgeLog.push("warn", "system", "Emergency stop engaged");
     if (this.heartbeatTimer) window.clearInterval(this.heartbeatTimer);
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
@@ -106,18 +110,60 @@ export class HIDBridge {
   connect() {
     if (this.stopped) return;
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
+    // Validate URL up-front so we surface a precise error code instead of
+    // letting the WebSocket constructor throw an opaque SyntaxError.
+    try {
+      const parsed = new URL(this.url);
+      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+        throw new Error(`Unsupported protocol ${parsed.protocol}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Invalid URL";
+      this.lastErrorCode = "invalid_url";
+      TelemetryStore.set({
+        wsState: "disconnected",
+        bridgeError: {
+          code: "invalid_url",
+          message: `Invalid bridge URL "${this.url}" — ${message}`,
+        },
+      });
+      BridgeLog.push("error", "ws", `Invalid URL: ${message}`);
+      return;
+    }
     TelemetryStore.set({ wsState: "connecting" });
+    TelemetryStore.set({
+      bridgeError: {
+        code: "connecting",
+        message: this.reconnectAttempts === 0
+          ? `Connecting to ${this.url}…`
+          : `Reconnecting to ${this.url} (attempt ${this.reconnectAttempts + 1})…`,
+        attempt: this.reconnectAttempts,
+      },
+    });
     BridgeLog.push("info", "ws", `Connecting → ${this.url}`);
     try {
       this.ws = new WebSocket(this.url);
     } catch (err) {
       BridgeLog.push("error", "ws", `Constructor threw: ${err instanceof Error ? err.message : String(err)}`);
+      this.lastErrorCode = "refused";
       this.scheduleReconnect();
       return;
     }
     const socket = this.ws;
+    // Track whether we ever reached OPEN — distinguishes "refused"
+    // (close before open) from "dropped after connect".
+    let everOpened = false;
+    const openTimeout = window.setTimeout(() => {
+      if (socket.readyState === WebSocket.CONNECTING) {
+        this.lastErrorCode = "timeout";
+        try { socket.close(4001, "open_timeout"); } catch { /* noop */ }
+      }
+    }, 4000);
     socket.onopen = () => {
       if (this.ws !== socket) return;
+      window.clearTimeout(openTimeout);
+      everOpened = true;
+      this.lastErrorCode = null;
       this.backoff = 250;
       this.reconnectAttempts = 0;
       TelemetryStore.set({
@@ -125,6 +171,7 @@ export class HIDBridge {
         bridgeProbe: "ok",
         bridgeValidated: true,
         bridgeProbeMsg: "Live bridge connected",
+        bridgeError: { code: "ok", message: "Bridge connected" },
       });
       BridgeLog.push("ok", "ws", "Live stream open");
       // Resubscribe hello so the daemon (or any proxy) knows we are back.
@@ -168,12 +215,21 @@ export class HIDBridge {
     socket.onclose = (event) => {
       if (this.ws !== socket) return;
       this.ws = null;
+      window.clearTimeout(openTimeout);
       if (this.heartbeatTimer) window.clearInterval(this.heartbeatTimer);
       this.heartbeatPendingSince = 0;
       if (this.stopped) {
         TelemetryStore.set({ wsState: "stopped" });
         BridgeLog.push("info", "ws", `Closed (stopped, code ${event.code || 1005})`);
         return;
+      }
+      // Classify the failure so the UI can show a clear, actionable banner.
+      if (!everOpened) {
+        if (event.code === 4001 || this.lastErrorCode === "timeout") {
+          this.lastErrorCode = "timeout";
+        } else {
+          this.lastErrorCode = "refused";
+        }
       }
       TelemetryStore.set({
         wsState: "disconnected",
@@ -187,6 +243,7 @@ export class HIDBridge {
     socket.onerror = () => {
       if (this.ws !== socket) return;
       BridgeLog.push("error", "ws", "Socket error event");
+      if (!everOpened) this.lastErrorCode = "refused";
       try {
         socket.close();
       } catch {
@@ -199,6 +256,11 @@ export class HIDBridge {
     BridgeLog.push("info", "reconnect", "Manual reconnect");
     this.reconnectAttempts = 0;
     this.backoff = 250;
+    this.lastErrorCode = null;
+    if (this.reconnectTimer) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     try {
       this.ws?.close();
     } catch {
@@ -210,21 +272,24 @@ export class HIDBridge {
 
   private scheduleReconnect() {
     if (this.stopped) return;
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      BridgeLog.push(
-        "error",
-        "reconnect",
-        `Gave up after ${this.maxReconnectAttempts} attempts — press RECONNECT to retry`,
-      );
-      TelemetryStore.set({ bridgeProbeMsg: "Reconnect attempts exhausted" });
-      return;
-    }
     this.reconnectAttempts += 1;
     const wait = this.backoff;
+    const code: "refused" | "timeout" = this.lastErrorCode === "timeout" ? "timeout" : "refused";
+    const baseMsg = code === "timeout"
+      ? `No response from ${this.url}. The bridge may be busy or blocked by a firewall.`
+      : `Cannot reach the bridge at ${this.url}. Is the daemon running? Start it with: python omnipoint_bridge.py`;
+    TelemetryStore.set({
+      bridgeError: {
+        code: "retrying",
+        message: `${baseMsg} Retrying in ${(wait / 1000).toFixed(1)}s (attempt ${this.reconnectAttempts}).`,
+        nextRetryMs: wait,
+        attempt: this.reconnectAttempts,
+      },
+    });
     BridgeLog.push(
       "info",
       "reconnect",
-      `Retry ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${wait}ms`,
+      `Retry ${this.reconnectAttempts} in ${wait}ms (${code})`,
     );
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
     this.reconnectTimer = window.setTimeout(() => this.connect(), wait);
