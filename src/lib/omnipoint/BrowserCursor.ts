@@ -1238,11 +1238,32 @@ export class BrowserCursor {
     const now = performance.now();
     const transitionedTo = (k: GestureKind) => g === k && this.lastGesture !== k;
 
+    // Fist-as-grab: while a fist is held, hold the left mouse button down
+    // so the user can drag whatever the cursor is over (selections, files,
+    // windows, list items). Release on un-fist.
+    if (g === "fist" && !this.fistActive) {
+      // Ensure any pinch-drag state is released first
+      if (this.isDown) {
+        this.dispatchUp(this.lastTarget);
+        this.isDown = false;
+      }
+      this.dispatchDown(target, x, y);
+      this.isDown = true;
+      this.fistActive = true;
+      this.fistStartedAt = now;
+      this.setLabel("GRAB");
+    } else if (g !== "fist" && this.fistActive) {
+      this.dispatchUp(this.lastTarget);
+      this.isDown = false;
+      this.fistActive = false;
+      this.setLabel("RELEASE");
+    }
+
     if (g === "drag" && !this.isDown) {
       this.dispatchDown(target, x, y);
       this.isDown = true;
       this.setLabel("DRAG");
-    } else if (this.isDown && g !== "drag") {
+    } else if (this.isDown && g !== "drag" && !this.fistActive) {
       this.dispatchUp(target);
       this.dispatchClick(target, x, y);
       this.isDown = false;
@@ -1265,8 +1286,6 @@ export class BrowserCursor {
       this.dispatchWheel(target, x, y, delta);
       this.lastScrollAt = now;
       this.setLabel(g === "scroll_up" ? "SCROLL ↑" : "SCROLL ↓");
-    } else if (g === "fist") {
-      this.setLabel("HOLD");
     } else if (g === "point") {
       this.setLabel("");
     } else if (g === "none") {
