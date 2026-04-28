@@ -161,30 +161,22 @@ export class GestureEngine {
    * system its "millimeter accuracy" feel — micro-tremor is filtered out
    * but real micro-motion still passes through.
    */
-  private applySmoothingParams() {
+  /** Tune One-Euro params for ONE hand based on its own cursor speed. */
+  private applySmoothingParams(h: HandState) {
     const baseCutoff = Math.max(0.3, Math.min(6, this.config.smoothingAlpha));
-    // Speed-adaptive precision boost: 0..1 where 1 = nearly motionless.
-    // cursorSpeed is in normalized-units/sec — idle ≈ 0.01, sweep ≈ 1+.
-    // We require the hand to actually be PRESENT before applying any boost,
-    // otherwise the very first frames (when cursorSpeed is still 0 from init)
-    // would lock the filter wide-shut and detection would feel "frozen".
-    const handPresent = TelemetryStore.get().handPresent;
-    const stillness = handPresent
-      ? Math.max(0, Math.min(1, 1 - this.cursorSpeed * 8))
+    // Stillness is per-hand now. If the hand has never produced a sample
+    // (just appeared), keep stillness at 0 so the filter doesn't lock.
+    const stillness = h.smoothedIndex
+      ? Math.max(0, Math.min(1, 1 - h.cursorSpeed * 8))
       : 0;
-    // When still, blend cutoff toward 0.6 Hz (firm lock-in but not paralyzed).
-    // When moving, sit at baseCutoff so motion is followed faithfully.
     const minCutoff = baseCutoff * (1 - 0.55 * stillness) + 0.6 * stillness;
-    // beta scales gently with cutoff so fast motion is always followed.
     const beta = 0.015 + baseCutoff * 0.012;
-    this.fThumb.setParams(minCutoff, beta);
-    this.fIndex.setParams(minCutoff, beta);
-    this.fIndexMcp.setParams(minCutoff * 0.9, beta);
-    this.fWrist.setParams(minCutoff * 0.9, beta);
-    this.fMiddleTip.setParams(minCutoff, beta);
-    // Cursor filter is always slightly snappier than landmarks.
-    this.fCursor.setParams(Math.min(6, minCutoff + 0.8), beta + 0.015);
-    TelemetryStore.set({ precisionMode: stillness > 0.6 });
+    h.fThumb.setParams(minCutoff, beta);
+    h.fIndex.setParams(minCutoff, beta);
+    h.fIndexMcp.setParams(minCutoff * 0.9, beta);
+    h.fWrist.setParams(minCutoff * 0.9, beta);
+    h.fMiddleTip.setParams(minCutoff, beta);
+    h.fCursor.setParams(Math.min(6, minCutoff + 0.8), beta + 0.015);
   }
 
   async init(
@@ -250,9 +242,15 @@ export class GestureEngine {
   }
 
   setOrigin() {
-    if (!this.smoothedIndex) return;
-    this.originOffset.x = this.smoothedIndex[0] - 0.5;
-    this.originOffset.y = this.smoothedIndex[1] - 0.5;
+    // Use whichever hand currently has a smoothed sample (prefer the
+    // last primary hand). This lets the user calibrate origin with either
+    // hand and have both hands respect the same active-zone center.
+    const candidate =
+      (this.lastPrimary && this.hands.get(this.lastPrimary)) ||
+      this.hands.get("Right") || this.hands.get("Left");
+    if (!candidate?.smoothedIndex) return;
+    this.originOffset.x = candidate.smoothedIndex[0] - 0.5;
+    this.originOffset.y = candidate.smoothedIndex[1] - 0.5;
   }
 
   /**
@@ -261,25 +259,9 @@ export class GestureEngine {
    * filter and the click state machine so the next frame starts fresh.
    */
   resetState() {
-    this.fThumb.reset();
-    this.fIndex.reset();
-    this.fIndexMcp.reset();
-    this.fWrist.reset();
-    this.fMiddleTip.reset();
-    this.fCursor.reset();
-    this.smoothedThumb = null;
-    this.smoothedIndex = null;
-    this.prevIndex = null;
-    this.prevPinch = null;
-    this.prevPinchT = 0;
-    this.pinchVelocity = 0;
-    this.cursorSpeed = 0;
-    this.clickState = "IDLE";
-    this.pinchStartTs = 0;
-    this.gestureCandidate = "none";
-    this.gestureCandidateCount = 0;
-    this.committedGesture = "none";
-    this.lastScrollY = null;
+    for (const h of this.hands.values()) h.reset();
+    this.hands.clear();
+    this.lastPrimary = null;
     this.lastVideoTime = -1;
     TelemetryStore.set({
       sensorLost: false,
@@ -291,6 +273,7 @@ export class GestureEngine {
       gesture: "none",
       landmarks: [],
       confidence: 0,
+      precisionMode: false,
     });
   }
 
