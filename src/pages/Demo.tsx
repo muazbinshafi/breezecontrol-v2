@@ -373,6 +373,22 @@ const Demo = () => {
           />
         )}
         {!showInit && debugOverlayOn && <DualHandDebugOverlay />}
+        {!showInit && (
+          <div className="fixed bottom-4 right-4 z-40 flex flex-col gap-1 font-mono text-[9px] tracking-[0.25em]">
+            <button
+              onClick={() => setSetupCheckOpen(true)}
+              className="px-3 h-8 border hairline bg-card/70 backdrop-blur text-muted-foreground hover:text-foreground"
+            >
+              ◉ DUAL-HAND CHECK
+            </button>
+            <button
+              onClick={() => setDebugOverlayOn((v) => !v)}
+              className="px-3 h-8 border hairline bg-card/70 backdrop-blur text-muted-foreground hover:text-foreground"
+            >
+              {debugOverlayOn ? "✕ HIDE DEBUG" : "● SHOW DEBUG"}
+            </button>
+          </div>
+        )}
         <CameraSetupCheck
           open={setupCheckOpen}
           onClose={() => {
