@@ -82,7 +82,11 @@ export class HIDBridge {
 
   emergencyStop() {
     this.stopped = true;
-    TelemetryStore.set({ wsState: "stopped", emergencyStop: true });
+    TelemetryStore.set({
+      wsState: "stopped",
+      emergencyStop: true,
+      bridgeError: { code: "idle", message: "Bridge stopped" },
+    });
     BridgeLog.push("warn", "system", "Emergency stop engaged");
     if (this.heartbeatTimer) window.clearInterval(this.heartbeatTimer);
     if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
