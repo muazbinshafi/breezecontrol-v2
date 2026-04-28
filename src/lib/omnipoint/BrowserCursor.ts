@@ -76,6 +76,15 @@ export class BrowserCursor {
   // Spray throttle.
   private lastSprayAt = 0;
 
+  // Fist-grab state. When the user makes a fist we begin a grab:
+  //  - pointer mode: synthesize a left-button mousedown at the cursor and
+  //    keep it pressed while fist is held; release on un-fist.
+  //  - draw mode: move the active selection rectangle (or, if none, build
+  //    a 200×200 floating selection around the cursor) while fist is held.
+  private fistActive = false;
+  private fistStartedAt = 0;
+  private fistDrawAnchor: DrawSegment | null = null;
+
   // Pose-hold buffer for higher accuracy on static gestures. Tracks the
   // currently-held configurable gesture, when it started, and when it last
   // fired (per gesture). A pose must be sustained for `holdMs` and clear
