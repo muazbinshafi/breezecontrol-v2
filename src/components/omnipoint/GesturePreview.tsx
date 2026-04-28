@@ -22,6 +22,7 @@ const GESTURE_LABEL: Record<GestureKind, string> = {
   scroll_down: "SCROLL ▼",
   thumbs_up: "THUMBS UP",
   open_palm: "OPEN PALM",
+  palm_back: "PALM BACK",
   fist: "FIST",
   pinky_only: "PINKY",
   four_fingers: "FOUR FINGERS",
