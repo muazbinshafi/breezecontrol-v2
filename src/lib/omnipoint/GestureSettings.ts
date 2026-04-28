@@ -49,6 +49,7 @@ export type PalmScope = "draw_only" | "pointer_only" | "both";
 // scroll/point are core pointer behaviors and not remappable.
 export type ConfigurableGesture =
   | "open_palm"
+  | "palm_back"
   | "thumbs_up"
   | "pinky_only"
   | "four_fingers"
@@ -153,6 +154,7 @@ export const ACTION_LABELS: Record<GestureAction, string> = {
 
 export const GESTURE_LABELS: Record<ConfigurableGesture, string> = {
   open_palm: "Open palm (5 fingers)",
+  palm_back: "Back of hand (palm away)",
   thumbs_up: "Thumbs up",
   pinky_only: "Pinky only",
   four_fingers: "Four fingers (no thumb)",
@@ -169,85 +171,97 @@ export const GESTURE_LABELS: Record<ConfigurableGesture, string> = {
 export const defaultSettings: GestureSettings = {
   bindings: {
     open_palm: {
-      pointerAction: "none",
+      // Palm facing camera = UNDO (per user spec, both modes)
+      pointerAction: "undo",
       drawAction: "undo",
-      holdMs: 180,
+      holdMs: 220,
+      cooldownMs: 600,
+      enabled: true,
+    },
+    palm_back: {
+      // Back of hand = REDO (per user spec, both modes)
+      pointerAction: "redo",
+      drawAction: "redo",
+      holdMs: 220,
       cooldownMs: 600,
       enabled: true,
     },
     thumbs_up: {
       pointerAction: "none",
-      drawAction: "redo",
+      drawAction: "none",
       holdMs: 200,
       cooldownMs: 350,
-      enabled: true,
+      enabled: false,
     },
     pinky_only: {
       pointerAction: "none",
-      drawAction: "clear",
+      drawAction: "none",
       holdMs: 220,
       cooldownMs: 350,
-      enabled: true,
-    },
-    four_fingers: {
-      pointerAction: "next",
-      drawAction: "save",
-      holdMs: 200,
-      cooldownMs: 380,
-      enabled: true,
-    },
-    fist: {
-      pointerAction: "emergency_stop",
-      drawAction: "emergency_stop",
-      holdMs: 350,
-      cooldownMs: 800,
       enabled: false,
     },
+    four_fingers: {
+      pointerAction: "none",
+      drawAction: "none",
+      holdMs: 200,
+      cooldownMs: 380,
+      enabled: false,
+    },
+    fist: {
+      // Fist = grab & move. Handled directly in BrowserCursor (NOT via the
+      // action dispatcher), but we keep the binding row enabled so users
+      // can see/tweak holdMs/cooldown if needed.
+      pointerAction: "none",
+      drawAction: "none",
+      holdMs: 350,
+      cooldownMs: 800,
+      enabled: true,
+    },
     middle_only: {
-      pointerAction: "tab",
-      drawAction: "switch_pointer",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 220,
       cooldownMs: 420,
-      enabled: true,
+      enabled: false,
     },
     ring_only: {
-      pointerAction: "shift_tab",
-      drawAction: "commit_selection",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 260,
       cooldownMs: 520,
-      enabled: true,
+      enabled: false,
     },
     two_finger_point: {
-      pointerAction: "page_down",
-      drawAction: "switch_draw",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 240,
       cooldownMs: 520,
       enabled: false,
     },
     three_fingers: {
-      pointerAction: "page_up",
-      drawAction: "crop_selection",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 240,
       cooldownMs: 520,
-      enabled: true,
+      enabled: false,
     },
     peace: {
-      pointerAction: "home",
-      drawAction: "clear",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 280,
       cooldownMs: 650,
       enabled: false,
     },
     rock: {
-      pointerAction: "fullscreen",
-      drawAction: "save",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 300,
       cooldownMs: 750,
       enabled: false,
     },
     phone_call: {
-      pointerAction: "play_pause",
-      drawAction: "screenshot",
+      pointerAction: "none",
+      drawAction: "none",
       holdMs: 260,
       cooldownMs: 650,
       enabled: false,
@@ -341,6 +355,7 @@ export const GestureSettingsStore = {
 export function isConfigurable(g: GestureKind): g is ConfigurableGesture {
   return (
     g === "open_palm" ||
+    g === "palm_back" ||
     g === "thumbs_up" ||
     g === "pinky_only" ||
     g === "four_fingers" ||
