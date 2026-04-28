@@ -974,7 +974,7 @@ export class BrowserCursor {
       if (g === "fist") {
         if (!this.fistActive) {
           this.fistActive = true;
-          this.fistStartedAt = now;
+          this.fistStartedAt = performance.now();
           if (!this.selectRect || !this.selectImg) {
             // Build an instant 200×200 floating selection around cursor.
             const W = 200, H = 200;
