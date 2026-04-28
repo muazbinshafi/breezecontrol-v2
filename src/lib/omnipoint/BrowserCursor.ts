@@ -82,6 +82,9 @@ export class BrowserCursor {
   // `cooldownMs` between fires.
   private poseHeld: ConfigurableGesture | null = null;
   private poseHeldSince = 0;
+  // Last time we saw this pose at all — used to grant a small grace window
+  // so 1-2 frames of "none" (from MediaPipe jitter) don't reset the hold.
+  private poseHeldLastSeen = 0;
   private poseFiredAt: Partial<Record<ConfigurableGesture, number>> = {};
 
   // Pull cursor from the active SensorPanel video rect so XY maps to the
