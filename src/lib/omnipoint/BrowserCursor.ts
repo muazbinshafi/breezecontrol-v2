@@ -247,6 +247,7 @@ export class BrowserCursor {
     if (!this.root.isConnected) document.body.appendChild(this.root);
     this.resizeCanvas();
     window.addEventListener("resize", this.resizeCanvas);
+    document.addEventListener("fullscreenchange", this.resizeCanvas);
     window.addEventListener("keydown", this.handleTextKey, true);
     this.unsub = TelemetryStore.subscribe(() => {/* no-op, polled in raf */});
     this.loop();
@@ -255,6 +256,7 @@ export class BrowserCursor {
   detach() {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener("resize", this.resizeCanvas);
+    document.removeEventListener("fullscreenchange", this.resizeCanvas);
     window.removeEventListener("keydown", this.handleTextKey, true);
     this.unsub?.();
     this.unsub = null;
