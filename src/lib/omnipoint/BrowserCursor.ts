@@ -247,10 +247,9 @@ export class BrowserCursor {
   private _handConnections: [number, number][] = [];
 
   attach() {
-    if (!this.root.isConnected) document.body.appendChild(this.root);
-    this.resizeCanvas();
+    this.mountRoot();
     window.addEventListener("resize", this.resizeCanvas);
-    document.addEventListener("fullscreenchange", this.resizeCanvas);
+    document.addEventListener("fullscreenchange", this.handleFullscreenChange);
     window.addEventListener("keydown", this.handleTextKey, true);
     this.unsub = TelemetryStore.subscribe(() => {/* no-op, polled in raf */});
     this.loop();
@@ -259,7 +258,7 @@ export class BrowserCursor {
   detach() {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener("resize", this.resizeCanvas);
-    document.removeEventListener("fullscreenchange", this.resizeCanvas);
+    document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
     window.removeEventListener("keydown", this.handleTextKey, true);
     this.unsub?.();
     this.unsub = null;
@@ -270,6 +269,16 @@ export class BrowserCursor {
     this.lastTarget = null;
     if (this.root.isConnected) this.root.remove();
   }
+
+  private mountRoot() {
+    const parent = (document.fullscreenElement as HTMLElement | null) ?? document.body;
+    if (this.root.parentElement !== parent) parent.appendChild(this.root);
+    this.resizeCanvas();
+  }
+
+  private handleFullscreenChange = () => {
+    this.mountRoot();
+  };
 
   /** Capture-phase key handler that types into the active text caret. */
   private handleTextKey = (e: KeyboardEvent) => {
