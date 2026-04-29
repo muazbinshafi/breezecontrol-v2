@@ -11,7 +11,7 @@ import {
   FilesetResolver,
   type HandLandmarkerResult,
 } from "@mediapipe/tasks-vision";
-import { TelemetryStore, type GestureKind, type HandLandmarks, type HandDebugInfo } from "./TelemetryStore";
+import { TelemetryStore, type GestureKind, type HandLandmarks, type HandDebugInfo, type HandLiveFrame } from "./TelemetryStore";
 import type { HIDBridge } from "./HIDBridge";
 import { OneEuroFilter2D, OneEuroFilter3D } from "./OneEuroFilter";
 
@@ -430,12 +430,17 @@ export class GestureEngine {
     const clickThreshold = this.config.clickThreshold + closingBoost;
     const releaseThreshold = Math.max(this.config.releaseThreshold, this.config.clickThreshold + 0.08);
     const isThreePinch = twoFingerScroll && pinch < clickThreshold && middlePinch < clickThreshold * 1.45;
-    const isPinch = indexOnly && pinch < clickThreshold && !isThreePinch;
+    // Pinch is now driven purely by thumb-index proximity. We only require
+    // the index finger to be extended (so a closed fist with thumb tucked
+    // against the index won't fire), but we no longer require middle/ring/
+    // pinky to be folded. This makes click + draw fire reliably whenever
+    // the user pinches, regardless of subtle finger pose variations.
+    const isPinch = indexExt && pinch < clickThreshold && !isThreePinch;
     const pressure = clamp01(1 - pinch / releaseThreshold);
 
     let scrollDelta = 0;
     let gesture: GestureKind = "none";
-    const cursorIntent = indexOnly || isPinch || twoFingerScroll;
+    const cursorIntent = indexExt || isPinch || twoFingerScroll;
 
     if (isPinch) {
       state.lastScrollY = null;
