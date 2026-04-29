@@ -412,24 +412,22 @@ export class GestureEngine {
         this.lastPrimary = primary.side;
         confidence = primary.score;
 
-        // Emit motion from EVERY hand with intent. This keeps both hands live
-        // at the same time for the local bridge; the primary hand is only the
-        // one mirrored into the single in-page cursor/telemetry surface.
+        // Emit primary motion every frame. Secondary hands can still click,
+        // drag, right-click, or scroll at the primary cursor location, so one
+        // hand can aim while the other acts without stealing cursor motion.
         let surfaceGesture = primary.gesture;
-        const motionHands = perHand.filter((p) => p.cursorIntent || p.gesture !== "none");
-        for (const p of motionHands.length > 0 ? motionHands : [primary]) {
-          this.emitMotion(p.h, p.gesture, p.pressure, p.side);
-        }
+        this.emitMotion(primary.h, primary.gesture, primary.pressure, primary.side);
         for (const p of perHand) {
           if (p.side === primary.side) continue;
           if (p.gesture === "click" || p.gesture === "right_click" ||
-              p.gesture === "scroll_up" || p.gesture === "scroll_down") {
+              p.gesture === "drag" || p.gesture === "scroll_up" ||
+              p.gesture === "scroll_down" || p.gesture === "fist") {
             // Use the primary cursor coordinates — secondary hand contributes
             // the gesture, but the click target is wherever the primary
             // cursor currently is. This matches the user's mental model:
             // "right hand aims, left hand taps to click".
             surfaceGesture = p.gesture;
-            this.emitMotion(primary.h, p.gesture, p.pressure, primary.side);
+            this.emitMotion(primary.h, p.gesture, p.pressure, p.side);
           }
         }
 
