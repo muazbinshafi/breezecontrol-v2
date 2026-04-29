@@ -379,8 +379,8 @@ export function GestureSettingsPanel() {
                 RESET TO DEFAULTS
               </button>
             </section>
-          </aside>
-        </div>
+          </div>
+        </aside>
       )}
     </>
   );
