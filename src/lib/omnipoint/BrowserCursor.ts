@@ -1039,6 +1039,10 @@ export class BrowserCursor {
     const g = snap.gesture;
     this.setRingState(g);
 
+    // Dual-hand: route the secondary hand (if present) through its own
+    // independent click / drag / draw pipeline so both hands act at once.
+    this.processSecondaryHand(snap);
+
     if (this.mode === "draw") {
       // Fist-as-grab in draw mode: if a selection rect already exists, drag
       // it; otherwise spawn a 200×200 floating selection around the cursor
