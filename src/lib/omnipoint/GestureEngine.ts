@@ -297,6 +297,16 @@ export class GestureEngine {
 
     const allLandmarks = frames.flatMap((f) => f.landmarks);
     const handsDebug = this.createDebug(frames, primary.side);
+    const handsLive: HandLiveFrame[] = frames.map((f) => ({
+      side: f.side,
+      cursorX: f.state.cursor.x,
+      cursorY: f.state.cursor.y,
+      gesture: f.gesture,
+      pressure: f.pressure,
+      fingersExtended: f.fingersExtended,
+      pinchDistance: f.pinch,
+      isPrimary: f.side === primary.side,
+    }));
     TelemetryStore.set({
       cursorX: primary.state.cursor.x,
       cursorY: primary.state.cursor.y,
@@ -310,6 +320,7 @@ export class GestureEngine {
       precisionMode: primary.state.cursorSpeed < 0.02,
       handsDetected: frames.length,
       handsDebug,
+      hands: handsLive,
       fps: this.frameTimes.length,
       inferenceMs,
       confidence: primary.score,
