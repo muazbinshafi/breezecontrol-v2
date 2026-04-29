@@ -413,11 +413,19 @@ export class GestureEngine {
         this.lastPrimary = primary.side;
         confidence = primary.score;
 
-        // Emit primary motion every frame. Secondary hands can still click,
-        // drag, right-click, or scroll at the primary cursor location, so one
-        // hand can aim while the other acts without stealing cursor motion.
+        // Emit one merged control stream: the primary hand supplies smooth
+        // index-finger coordinates; either hand can supply the active action.
+        // This avoids point/drag packet fighting in the local OS bridge.
         let surfaceGesture = primary.gesture;
-        this.emitMotion(primary.h, primary.gesture, primary.pressure, primary.side);
+        const secondaryActions = perHand.filter((p) =>
+          p.side !== primary.side &&
+          (p.gesture === "click" || p.gesture === "right_click" ||
+           p.gesture === "drag" || p.gesture === "scroll_up" ||
+           p.gesture === "scroll_down" || p.gesture === "fist")
+        );
+        if (secondaryActions.length === 0) {
+          this.emitMotion(primary.h, primary.gesture, primary.pressure, primary.side);
+        }
         for (const p of perHand) {
           if (p.side === primary.side) continue;
           if (p.gesture === "click" || p.gesture === "right_click" ||
