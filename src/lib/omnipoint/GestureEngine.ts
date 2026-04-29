@@ -163,19 +163,22 @@ export class GestureEngine {
   /** Tune One-Euro params for ONE hand based on its own cursor speed. */
   private applySmoothingParams(h: HandState) {
     const baseCutoff = Math.max(0.45, Math.min(4.5, this.config.smoothingAlpha));
-    // Keep the filter fluid instead of "locking" when the hand slows down;
-    // the old stillness clamp felt like the cursor got stuck on one point.
-    const stillness = h.smoothedIndex
-      ? Math.max(0, Math.min(1, 1 - h.cursorSpeed * 18))
-      : 0;
-    const minCutoff = baseCutoff * (1 - 0.18 * stillness) + 0.75 * stillness;
-    const beta = 0.045 + baseCutoff * 0.045;
+    // Buttery: NEVER push the cutoff down when the hand is still — that's
+    // what made the cursor feel "stuck" mid-motion. Instead we keep a flat,
+    // responsive baseline and rely on beta to widen the gate the moment the
+    // user moves with intent. Tiny drift is removed by the soft dead-zone
+    // (see processHand) rather than by clamping the filter.
+    const minCutoff = baseCutoff;
+    const beta = 0.07 + baseCutoff * 0.05;
     h.fThumb.setParams(minCutoff, beta);
     h.fIndex.setParams(minCutoff, beta);
     h.fIndexMcp.setParams(minCutoff * 0.9, beta);
     h.fWrist.setParams(minCutoff * 0.9, beta);
     h.fMiddleTip.setParams(minCutoff, beta);
-    h.fCursor.setParams(Math.min(5, minCutoff + 0.35), beta + 0.05);
+    // The cursor filter sits slightly tighter than the landmark filters so
+    // the on-screen pointer still glides smoothly even when raw landmarks
+    // jitter by a pixel or two.
+    h.fCursor.setParams(Math.min(5, minCutoff + 0.2), beta + 0.04);
   }
 
   async init(
@@ -607,15 +610,16 @@ export class GestureEngine {
       const dx = inZoneX - h.prevIndex.x;
       const dy = inZoneY - h.prevIndex.y;
       const speed = Math.hypot(dx, dy) / dt;
-      if (speed < this.config.deadZone) {
-        cx2 = h.cursor.x;
-        cy2 = h.cursor.y;
-      } else {
-        const accel = speed * this.config.sensitivity;
-        const gain = Math.max(1, accel);
-        cx2 = h.cursor.x + dx * gain;
-        cy2 = h.cursor.y + dy * gain;
-      }
+      // Soft dead-zone: instead of hard-freezing the cursor (which makes
+      // slow drawing/aiming feel like the pointer is stuck on a point), we
+      // attenuate motion smoothly below the deadZone threshold. This keeps
+      // sub-pixel intent flowing while still suppressing tremor.
+      const dz = this.config.deadZone;
+      const softGate = speed < dz ? (speed / dz) * (speed / dz) : 1;
+      const accel = speed * this.config.sensitivity;
+      const gain = Math.max(1, accel) * softGate;
+      cx2 = h.cursor.x + dx * gain;
+      cy2 = h.cursor.y + dy * gain;
     }
     const rawCx = Math.min(1, Math.max(0, cx2));
     const rawCy = Math.min(1, Math.max(0, cy2));
