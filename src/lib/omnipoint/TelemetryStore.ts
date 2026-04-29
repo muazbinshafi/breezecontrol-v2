@@ -26,6 +26,13 @@ export type GestureKind =
 export type BridgeProbe = "idle" | "probing" | "ok" | "failed";
 export type Handedness = "none" | "Left" | "Right";
 
+/**
+ * Hand role lock — when not "auto", the chosen hand is FORCED to drive the
+ * cursor while the other hand is reserved for click/drag/scroll actions.
+ * This prevents the "stealing control" feel when both hands are active.
+ */
+export type HandRoleLock = "auto" | "left_pointer" | "right_pointer";
+
 // thumb, index, middle, ring, pinky
 export type FingerStates = [boolean, boolean, boolean, boolean, boolean];
 
@@ -109,6 +116,8 @@ export interface TelemetrySnapshot {
     nextRetryMs?: number;
     attempt?: number;
   };
+  /** Locked-roles mode: pointer hand vs action hand. */
+  handRoleLock: HandRoleLock;
 }
 
 const initial: TelemetrySnapshot = {
@@ -139,6 +148,7 @@ const initial: TelemetrySnapshot = {
   handsDetected: 0,
   handsDebug: [],
   bridgeError: { code: "idle", message: "Bridge not active" },
+  handRoleLock: "auto",
 };
 
 let snapshot: TelemetrySnapshot = { ...initial };
