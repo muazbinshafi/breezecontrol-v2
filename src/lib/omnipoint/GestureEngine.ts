@@ -415,6 +415,7 @@ export class GestureEngine {
         // Emit motion from the primary hand. Then, for any OTHER hand
         // that is firing a click/scroll/right-click, emit its event too
         // (without moving the cursor) so both hands can act in parallel.
+        let surfaceGesture = primary.gesture;
         this.emitMotion(primary.h, primary.gesture, primary.pressure);
         for (const p of perHand) {
           if (p.side === primary.side) continue;
@@ -424,6 +425,7 @@ export class GestureEngine {
             // the gesture, but the click target is wherever the primary
             // cursor currently is. This matches the user's mental model:
             // "right hand aims, left hand taps to click".
+            surfaceGesture = p.gesture;
             this.emitMotion(primary.h, p.gesture, p.pressure);
           }
         }
@@ -456,7 +458,7 @@ export class GestureEngine {
         TelemetryStore.set({
           cursorX: primary.h.cursor.x,
           cursorY: primary.h.cursor.y,
-          gesture: primary.gesture,
+          gesture: surfaceGesture,
           handPresent: true,
           handedness: primary.side,
           fingersExtended: primary.fingersExtended,
