@@ -22,6 +22,7 @@ import { GestureSettingsStore } from "@/lib/omnipoint/GestureSettings";
 import { DualHandDebugOverlay } from "@/components/omnipoint/DualHandDebugOverlay";
 import { CameraSetupCheck } from "@/components/omnipoint/CameraSetupCheck";
 import { BridgeStatusBanner } from "@/components/omnipoint/BridgeStatusBanner";
+import { HandRoleLockToggle } from "@/components/omnipoint/HandRoleLockToggle";
 
 const Demo = () => {
   const [initialized, setInitialized] = useState(false);
@@ -375,6 +376,7 @@ const Demo = () => {
         {!showInit && debugOverlayOn && <DualHandDebugOverlay />}
         {!showInit && (
           <div className="fixed bottom-4 right-4 z-40 flex flex-col gap-1 font-mono text-[9px] tracking-[0.25em]">
+            <HandRoleLockToggle />
             <button
               onClick={() => setSetupCheckOpen(true)}
               className="px-3 h-8 border hairline bg-card/70 backdrop-blur text-muted-foreground hover:text-foreground"
