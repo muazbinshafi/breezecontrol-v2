@@ -365,7 +365,8 @@ export class GestureEngine {
         const indexControlPose = out.fingersExtended[1] && !out.fingersExtended[2] && !out.fingersExtended[3] && !out.fingersExtended[4];
         const cursorIntent = indexControlPose || out.gesture === "scroll_up" || out.gesture === "scroll_down";
         const fingers = out.fingerCount - (out.fingersExtended[0] ? 1 : 0);
-        const poseIntent = cursorIntent ? 0.9 : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
+        const motionIntent = Math.min(0.35, out.h.cursorSpeed * 0.08);
+        const poseIntent = cursorIntent ? 0.9 + motionIntent : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
         // Active gestures get only a tiny boost. Previously pinch/click got a
         // huge boost and stole primary control from the pointing hand, making
         // dual-hand use feel like "only one hand works".
@@ -405,8 +406,8 @@ export class GestureEngine {
         const primaryPool = cursorCandidates.length > 0 ? cursorCandidates : perHand;
         let primary = primaryPool[0];
         for (const p of primaryPool) {
-          const bias = p.side === this.lastPrimary ? 0.15 : 0;
-          const pBias = primary.side === this.lastPrimary ? 0.15 : 0;
+          const bias = p.side === this.lastPrimary ? 0.03 : 0;
+          const pBias = primary.side === this.lastPrimary ? 0.03 : 0;
           if (p.intent + bias > primary.intent + pBias) primary = p;
         }
         this.lastPrimary = primary.side;
