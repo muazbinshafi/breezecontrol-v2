@@ -365,7 +365,7 @@ export class GestureEngine {
         const indexControlPose = out.fingersExtended[1] && !out.fingersExtended[2] && !out.fingersExtended[3] && !out.fingersExtended[4];
         const cursorIntent = indexControlPose || out.gesture === "scroll_up" || out.gesture === "scroll_down";
         const fingers = out.fingerCount - (out.fingersExtended[0] ? 1 : 0);
-        const motionIntent = Math.min(0.35, out.h.cursorSpeed * 0.08);
+        const motionIntent = Math.min(0.35, h.cursorSpeed * 0.08);
         const poseIntent = cursorIntent ? 0.9 + motionIntent : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
         // Active gestures get only a tiny boost. Previously pinch/click got a
         // huge boost and stole primary control from the pointing hand, making
