@@ -321,17 +321,35 @@ export class GestureEngine {
         fingerCount: number;
         pinch: number;
         rawIndex: number;
+        cursorIntent: boolean;
       }[] = [];
 
-      for (let i = 0; i < result.landmarks.length; i++) {
+      const rawSides = result.landmarks.map((lm, i) => {
         const handednessSrc = result.handedness?.[i]?.[0]?.categoryName ?? "";
         // Selfie-mirror correction: MediaPipe reports the camera-frame side.
-        const side: "Left" | "Right" =
+        const classifierSide: "Left" | "Right" =
           handednessSrc === "Left" ? "Right" :
           handednessSrc === "Right" ? "Left" :
-          // Unknown handedness (rare) — fall back to slot 0 = Right, 1 = Left.
           (i === 0 ? "Right" : "Left");
-        if (seenSides.has(side)) continue; // never two hands on same side
+        const mirroredWristX = 1 - (lm[0]?.x ?? 0.5);
+        const positionSide: "Left" | "Right" = mirroredWristX < 0.5 ? "Left" : "Right";
+        return { classifierSide, positionSide };
+      });
+      const hasDuplicateClassifierSide = new Set(rawSides.map((s) => s.classifierSide)).size < rawSides.length;
+
+      for (let i = 0; i < result.landmarks.length; i++) {
+        // Do NOT drop a hand just because MediaPipe assigns both detections
+        // the same handedness. That was the main reason dual-hand control
+        // appeared to only detect one hand. When classifier sides collide,
+        // resolve by the hand's mirrored on-screen position instead.
+        let side: "Left" | "Right" = hasDuplicateClassifierSide
+          ? rawSides[i].positionSide
+          : rawSides[i].classifierSide;
+        if (seenSides.has(side)) {
+          const other: "Left" | "Right" = side === "Left" ? "Right" : "Left";
+          if (!seenSides.has(other)) side = other;
+          else continue;
+        }
         seenSides.add(side);
 
         let h = this.hands.get(side);
@@ -344,16 +362,18 @@ export class GestureEngine {
         const out = this.processHand(result, tNow, i, side, h);
         // Compute intent score for primary-hand selection.
         const score = result.handedness?.[i]?.[0]?.score ?? 0.8;
+        const indexControlPose = out.fingersExtended[1] && !out.fingersExtended[2] && !out.fingersExtended[3] && !out.fingersExtended[4];
+        const cursorIntent = indexControlPose || out.gesture === "scroll_up" || out.gesture === "scroll_down";
         const fingers = out.fingerCount - (out.fingersExtended[0] ? 1 : 0);
-        const pinchIntent = Math.max(0, 1 - out.pinch / 0.8);
-        const poseIntent = fingers === 1 || fingers === 4 || fingers === 0 ? 0.4 : 0.15;
-        // Active gestures (click/drag/scroll) get a big boost so that hand
-        // wins as primary the moment the user acts with it.
+        const poseIntent = cursorIntent ? 0.9 : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
+        // Active gestures get only a tiny boost. Previously pinch/click got a
+        // huge boost and stole primary control from the pointing hand, making
+        // dual-hand use feel like "only one hand works".
         const actionBoost =
           out.gesture === "click" || out.gesture === "drag" ||
           out.gesture === "scroll_up" || out.gesture === "scroll_down" ||
-          out.gesture === "right_click" ? 1.5 : 0;
-        const intent = pinchIntent * 1.2 + poseIntent + score * 0.3 + actionBoost;
+          out.gesture === "right_click" ? 0.12 : 0;
+        const intent = poseIntent + score * 0.25 + actionBoost;
         perHand.push({
           side, h, intent, score,
           gesture: out.gesture,
@@ -363,6 +383,7 @@ export class GestureEngine {
           fingerCount: out.fingerCount,
           pinch: out.pinch,
           rawIndex: i,
+          cursorIntent,
         });
       }
 
@@ -380,8 +401,10 @@ export class GestureEngine {
       if (perHand.length > 0) {
         // Pick primary: highest-intent. Add a small bias for the previous
         // primary so we don't flicker frame-to-frame on near-ties.
-        let primary = perHand[0];
-        for (const p of perHand) {
+        const cursorCandidates = perHand.filter((p) => p.cursorIntent);
+        const primaryPool = cursorCandidates.length > 0 ? cursorCandidates : perHand;
+        let primary = primaryPool[0];
+        for (const p of primaryPool) {
           const bias = p.side === this.lastPrimary ? 0.15 : 0;
           const pBias = primary.side === this.lastPrimary ? 0.15 : 0;
           if (p.intent + bias > primary.intent + pBias) primary = p;
@@ -392,6 +415,7 @@ export class GestureEngine {
         // Emit motion from the primary hand. Then, for any OTHER hand
         // that is firing a click/scroll/right-click, emit its event too
         // (without moving the cursor) so both hands can act in parallel.
+        let surfaceGesture = primary.gesture;
         this.emitMotion(primary.h, primary.gesture, primary.pressure);
         for (const p of perHand) {
           if (p.side === primary.side) continue;
@@ -401,6 +425,7 @@ export class GestureEngine {
             // the gesture, but the click target is wherever the primary
             // cursor currently is. This matches the user's mental model:
             // "right hand aims, left hand taps to click".
+            surfaceGesture = p.gesture;
             this.emitMotion(primary.h, p.gesture, p.pressure);
           }
         }
@@ -433,7 +458,7 @@ export class GestureEngine {
         TelemetryStore.set({
           cursorX: primary.h.cursor.x,
           cursorY: primary.h.cursor.y,
-          gesture: primary.gesture,
+          gesture: surfaceGesture,
           handPresent: true,
           handedness: primary.side,
           fingersExtended: primary.fingersExtended,
@@ -648,18 +673,24 @@ export class GestureEngine {
     const isPeace = thumbExt && indexExt && middleExt && !ringExt && !pinkyExt;
     const isRock = indexExt && pinkyExt && !middleExt && !ringExt;
     const isPhoneCall = thumbExt && pinkyExt && !indexExt && !middleExt && !ringExt;
-    const isPointing = indexExt && !middleExt && !ringExt && !pinkyExt;
+    // Cursor should move ONLY from the index finger. A natural pinch keeps
+    // the index extended; if the index is folded, treat the pose as a static
+    // shortcut/no-op rather than moving or clicking.
+    const isIndexControlPose = indexExt && !middleExt && !ringExt && !pinkyExt;
+    const isPointing = isIndexControlPose && !thumbExt;
     const isThreePinch = pinch < effClickThreshold &&
                          tmPinch < effClickThreshold * 1.4 &&
                          indexExt && middleExt;
-    const isPinchClick = pinch < effClickThreshold && !isThreePinch;
+    const isPinchClick = isIndexControlPose && pinch < effClickThreshold && !isThreePinch;
 
     // ===== Cursor-motion gate (per user spec) =====
-    // Move only when intentionally pointing, pinching, scrolling, or fisted.
+    // Move only when intentionally pointing with the index finger, pinching
+    // with the index finger, or scrolling. Static poses/fist do not move the
+    // cursor, matching the requested "move cursor only when index moves" rule.
     // This prevents the cursor from sliding while the user holds open-palm
     // (undo) or other static shortcut poses.
     const cursorAllowed =
-      isPointing || isPinchClick || isThreePinch || scrollMode || isFist;
+      isPointing || isPinchClick || isThreePinch || scrollMode;
     if (cursorAllowed) {
       h.cursor.x = pendingCursor.x;
       h.cursor.y = pendingCursor.y;
@@ -700,8 +731,6 @@ export class GestureEngine {
       } else if (h.clickState === "DRAG") {
         gesture = "drag";
       }
-    } else if (isFist) {
-      gesture = "fist"; h.clickState = "IDLE"; h.pinchStartTs = 0; h.lastScrollY = null;
     } else if (isOpenPalm) {
       gesture = palmFacing === "back" ? "palm_back" : "open_palm";
       h.clickState = "IDLE"; h.lastScrollY = null;
@@ -740,7 +769,7 @@ export class GestureEngine {
     } else {
       h.lastScrollY = null;
       if (h.clickState === "IDLE") {
-        if (pinch < effClickThreshold) {
+        if (isPinchClick) {
           if (h.pinchStartTs === 0) h.pinchStartTs = tNow;
           if (tNow - h.pinchStartTs >= this.debounceMs) {
             h.clickState = "CLICK_DOWN";
@@ -769,7 +798,7 @@ export class GestureEngine {
     const isStaticPose =
       gesture === "open_palm" || gesture === "palm_back" || gesture === "thumbs_up" ||
       gesture === "pinky_only" || gesture === "four_fingers" ||
-      gesture === "fist" || gesture === "middle_only" ||
+      gesture === "middle_only" ||
       gesture === "ring_only" || gesture === "two_finger_point" ||
       gesture === "three_fingers" || gesture === "peace" ||
       gesture === "rock" || gesture === "phone_call" ||

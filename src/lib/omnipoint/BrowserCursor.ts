@@ -106,7 +106,10 @@ export class BrowserCursor {
     this.root.setAttribute("aria-hidden", "true");
     Object.assign(this.root.style, {
       position: "fixed",
-      inset: "0",
+      left: "0",
+      top: "0",
+      width: "100vw",
+      height: "100vh",
       pointerEvents: "none",
       zIndex: "2147483646",
     } as CSSStyleDeclaration);
@@ -244,9 +247,9 @@ export class BrowserCursor {
   private _handConnections: [number, number][] = [];
 
   attach() {
-    if (!this.root.isConnected) document.body.appendChild(this.root);
-    this.resizeCanvas();
+    this.mountRoot();
     window.addEventListener("resize", this.resizeCanvas);
+    document.addEventListener("fullscreenchange", this.handleFullscreenChange);
     window.addEventListener("keydown", this.handleTextKey, true);
     this.unsub = TelemetryStore.subscribe(() => {/* no-op, polled in raf */});
     this.loop();
@@ -255,6 +258,7 @@ export class BrowserCursor {
   detach() {
     cancelAnimationFrame(this.rafId);
     window.removeEventListener("resize", this.resizeCanvas);
+    document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
     window.removeEventListener("keydown", this.handleTextKey, true);
     this.unsub?.();
     this.unsub = null;
@@ -265,6 +269,16 @@ export class BrowserCursor {
     this.lastTarget = null;
     if (this.root.isConnected) this.root.remove();
   }
+
+  private mountRoot() {
+    const parent = (document.fullscreenElement as HTMLElement | null) ?? document.body;
+    if (this.root.parentElement !== parent) parent.appendChild(this.root);
+    this.resizeCanvas();
+  }
+
+  private handleFullscreenChange = () => {
+    this.mountRoot();
+  };
 
   /** Capture-phase key handler that types into the active text caret. */
   private handleTextKey = (e: KeyboardEvent) => {
@@ -322,8 +336,13 @@ export class BrowserCursor {
 
   private resizeCanvas = () => {
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    this.drawCanvas.width = Math.floor(window.innerWidth * dpr);
-    this.drawCanvas.height = Math.floor(window.innerHeight * dpr);
+    const box = this.getActiveViewportBox();
+    this.root.style.left = `${box.left}px`;
+    this.root.style.top = `${box.top}px`;
+    this.root.style.width = `${box.width}px`;
+    this.root.style.height = `${box.height}px`;
+    this.drawCanvas.width = Math.floor(box.width * dpr);
+    this.drawCanvas.height = Math.floor(box.height * dpr);
     if (this.drawCtx) {
       this.drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.drawCtx.lineCap = "round";
@@ -331,24 +350,21 @@ export class BrowserCursor {
     }
   };
 
-  private resolveScreenXY(nx: number, ny: number): { x: number; y: number } {
-    // The gesture engine yields normalized [0..1] coordinates inside the
-    // active zone of the camera frame. Map into the on-screen video rect so
-    // the cursor visually tracks the user's hand. If no video element is
-    // visible (e.g. user scrolled away), fall back to the full viewport.
-    const target = document.querySelector(this.targetSelector) as HTMLElement | null;
-    const rect = target?.getBoundingClientRect();
-    if (rect && rect.width > 4 && rect.height > 4 && rect.bottom > 0 && rect.right > 0) {
-      // Expand mapping to the full viewport so the cursor can reach UI
-      // outside the camera tile, while still being centred on the camera
-      // origin. We blend: 60% camera-rect mapping, 40% full-viewport.
-      const camX = rect.left + nx * rect.width;
-      const camY = rect.top + ny * rect.height;
-      const vpX = nx * window.innerWidth;
-      const vpY = ny * window.innerHeight;
-      return { x: camX * 0.55 + vpX * 0.45, y: camY * 0.55 + vpY * 0.45 };
+  private getActiveViewportBox(): { left: number; top: number; width: number; height: number } {
+    const fs = document.fullscreenElement as HTMLElement | null;
+    const rect = fs?.getBoundingClientRect();
+    if (rect && rect.width > 4 && rect.height > 4) {
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
     }
-    return { x: nx * window.innerWidth, y: ny * window.innerHeight };
+    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  }
+
+  private resolveScreenXY(nx: number, ny: number): { x: number; y: number } {
+    // Fullscreen-safe: always map normalized coordinates to the actual active
+    // viewport/fullscreen element, not the camera tile. This lets the cursor,
+    // click and drawing canvas reach every pixel in fullscreen.
+    const box = this.getActiveViewportBox();
+    return { x: box.left + nx * box.width, y: box.top + ny * box.height };
   }
 
   private hitTest(x: number, y: number): Element | null {
@@ -1530,8 +1546,8 @@ export class BrowserCursor {
         this.setLabel("PLAY");
         break;
       case "fullscreen":
-        this.dispatchKey("f", 70);
-        this.setLabel("FULL");
+        void this.toggleFullscreen();
+        this.setLabel(document.fullscreenElement ? "EXIT FULL" : "FULL");
         break;
       case "screenshot":
         if (this.mode === "draw") this.saveAsPng();
@@ -1563,6 +1579,21 @@ export class BrowserCursor {
     const cur = parseFloat((document.body.style as CSSStyleDeclaration & { zoom?: string }).zoom || "1") || 1;
     const next = Math.min(2, Math.max(0.5, cur + delta));
     (document.body.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(next);
+  }
+
+  private async toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      const target =
+        (document.querySelector("main") as HTMLElement | null) ??
+        document.documentElement;
+      await target.requestFullscreen({ navigationUI: "hide" });
+    } catch {
+      this.dispatchKey("f", 70);
+    }
   }
 
   private dispatchKey(
