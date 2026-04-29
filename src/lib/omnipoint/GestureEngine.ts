@@ -323,15 +323,32 @@ export class GestureEngine {
         rawIndex: number;
       }[] = [];
 
-      for (let i = 0; i < result.landmarks.length; i++) {
+      const rawSides = result.landmarks.map((lm, i) => {
         const handednessSrc = result.handedness?.[i]?.[0]?.categoryName ?? "";
         // Selfie-mirror correction: MediaPipe reports the camera-frame side.
-        const side: "Left" | "Right" =
+        const classifierSide: "Left" | "Right" =
           handednessSrc === "Left" ? "Right" :
           handednessSrc === "Right" ? "Left" :
-          // Unknown handedness (rare) — fall back to slot 0 = Right, 1 = Left.
           (i === 0 ? "Right" : "Left");
-        if (seenSides.has(side)) continue; // never two hands on same side
+        const mirroredWristX = 1 - (lm[0]?.x ?? 0.5);
+        const positionSide: "Left" | "Right" = mirroredWristX < 0.5 ? "Left" : "Right";
+        return { classifierSide, positionSide };
+      });
+      const hasDuplicateClassifierSide = new Set(rawSides.map((s) => s.classifierSide)).size < rawSides.length;
+
+      for (let i = 0; i < result.landmarks.length; i++) {
+        // Do NOT drop a hand just because MediaPipe assigns both detections
+        // the same handedness. That was the main reason dual-hand control
+        // appeared to only detect one hand. When classifier sides collide,
+        // resolve by the hand's mirrored on-screen position instead.
+        let side: "Left" | "Right" = hasDuplicateClassifierSide
+          ? rawSides[i].positionSide
+          : rawSides[i].classifierSide;
+        if (seenSides.has(side)) {
+          const other: "Left" | "Right" = side === "Left" ? "Right" : "Left";
+          if (!seenSides.has(other)) side = other;
+          else continue;
+        }
         seenSides.add(side);
 
         let h = this.hands.get(side);
