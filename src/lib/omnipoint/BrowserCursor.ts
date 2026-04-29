@@ -1588,7 +1588,7 @@ export class BrowserCursor {
         return;
       }
       const target =
-        document.querySelector("main") as HTMLElement | null ??
+        (document.querySelector("main") as HTMLElement | null) ??
         document.documentElement;
       await target.requestFullscreen({ navigationUI: "hide" });
     } catch {
