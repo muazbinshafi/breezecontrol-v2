@@ -687,7 +687,7 @@ export class GestureEngine {
     // the index extended; if the index is folded, treat the pose as a static
     // shortcut/no-op rather than moving or clicking.
     const isIndexControlPose = indexExt && !middleExt && !ringExt && !pinkyExt;
-    const isPointing = isIndexControlPose && !thumbExt;
+    const isPointing = isIndexControlPose;
     const isThreePinch = pinch < effClickThreshold &&
                          tmPinch < effClickThreshold * 1.4 &&
                          indexExt && middleExt;
