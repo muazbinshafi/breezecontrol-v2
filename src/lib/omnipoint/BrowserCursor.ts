@@ -54,6 +54,20 @@ export class BrowserCursor {
   private lastScrollAt = 0;
   private lastDrawPt: DrawSegment | null = null;
   private wasDrawActive = false;
+
+  // ─── SECONDARY HAND (dual-hand independent control) ─────────────────
+  // The engine reports up to 2 hands per frame. The primary hand drives
+  // the main cursor (above). The secondary hand gets its own cursor +
+  // independent click / drag / freehand-draw routing so BOTH hands can
+  // act at the same time with the same set of functions.
+  private secondaryCursor: HTMLDivElement | null = null;
+  private secondaryLabel: HTMLDivElement | null = null;
+  private isDown2 = false;
+  private lastTarget2: Element | null = null;
+  private lastClickAt2 = 0;
+  private lastGesture2: GestureKind = "none";
+  private lastDrawPt2: DrawSegment | null = null;
+  private wasDrawActive2 = false;
   // Shape preview state — when drawing a shape we hold the start anchor
   // and a snapshot of the canvas to redraw the rubber-band on each frame.
   private shapeStart: DrawSegment | null = null;
