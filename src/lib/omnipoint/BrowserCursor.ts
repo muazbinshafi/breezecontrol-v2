@@ -106,7 +106,10 @@ export class BrowserCursor {
     this.root.setAttribute("aria-hidden", "true");
     Object.assign(this.root.style, {
       position: "fixed",
-      inset: "0",
+      left: "0",
+      top: "0",
+      width: "100vw",
+      height: "100vh",
       pointerEvents: "none",
       zIndex: "2147483646",
     } as CSSStyleDeclaration);
