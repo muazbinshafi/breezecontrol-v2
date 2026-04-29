@@ -1036,18 +1036,12 @@ export class BrowserCursor {
         this.setLabel("DROP");
       }
 
-      // Draw mode now trusts the rebuilt gesture engine only. Raw pinch
-      // distance is no longer used as a shortcut because it can put ink down
-      // while the action hand is only moving into position.
-      // POSE GATE: only put down ink when the user is actually pointing —
-      // index extended, middle + ring + pinky folded. This prevents a moving
-      // open hand or fist from drawing. Thumb is allowed in either state so
-      // the natural pinch (thumb+index) still counts.
-      const ext = snap.fingersExtended; // [thumb, index, middle, ring, pinky]
-      const indexOnlyPose =
-        snap.handPresent && ext[1] && !ext[2] && !ext[3] && !ext[4];
-      const isDrawing =
-        indexOnlyPose && (g === "click" || g === "drag");
+      // Draw mode trusts the rebuilt gesture engine. A pinch (thumb+index
+      // close together) is what arms drawing — the engine already requires
+      // the index finger to be extended so a closed fist won't accidentally
+      // start an ink stroke. We no longer require all the other fingers to
+      // be folded, which used to make natural pinches fail to draw.
+      const isDrawing = g === "click" || g === "drag";
       const tool = PaintStore.get().tool;
       const isShape = PaintStore.isShape(tool);
       const isFill = PaintStore.isFill(tool);
