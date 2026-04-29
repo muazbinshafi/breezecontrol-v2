@@ -723,8 +723,6 @@ export class GestureEngine {
       } else if (h.clickState === "DRAG") {
         gesture = "drag";
       }
-    } else if (isFist) {
-      gesture = "fist"; h.clickState = "IDLE"; h.pinchStartTs = 0; h.lastScrollY = null;
     } else if (isOpenPalm) {
       gesture = palmFacing === "back" ? "palm_back" : "open_palm";
       h.clickState = "IDLE"; h.lastScrollY = null;
@@ -763,7 +761,7 @@ export class GestureEngine {
     } else {
       h.lastScrollY = null;
       if (h.clickState === "IDLE") {
-        if (pinch < effClickThreshold) {
+        if (isPinchClick) {
           if (h.pinchStartTs === 0) h.pinchStartTs = tNow;
           if (tNow - h.pinchStartTs >= this.debounceMs) {
             h.clickState = "CLICK_DOWN";
