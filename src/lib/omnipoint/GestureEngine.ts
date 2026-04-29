@@ -23,11 +23,11 @@ export interface EngineConfig {
 }
 
 export const defaultConfig: EngineConfig = {
-  sensitivity: 1.4,
+  sensitivity: 1.15,
   // Lower minCutoff → smoother. With our adaptive precision-mode below, the
   // engine drops cutoff further when the hand is nearly still, so we can keep
   // the baseline snappy here without sacrificing sub-mm steadiness.
-  smoothingAlpha: 1.0,
+  smoothingAlpha: 0.85,
   // pinch is now a *ratio* of hand size (pinchDist / index-MCP→wrist).
   // index-MCP→wrist is ~70% of middle-MCP→wrist, so the same physical gap
   // yields a *larger* ratio — making sub-cm pinches far easier to trigger.
@@ -37,7 +37,7 @@ export const defaultConfig: EngineConfig = {
   releaseThreshold: 0.78,
   scrollSensitivity: 14,
   aspectRatio: 16 / 9,
-  deadZone: 0.0004,
+  deadZone: 0.00008,
 };
 
 const HAND_CONNECTIONS: [number, number][] = [
@@ -59,12 +59,12 @@ type ClickState = "IDLE" | "CLICK_DOWN" | "DRAG";
  * or scroll independently.
  */
 class HandState {
-  fThumb = new OneEuroFilter3D(1.4, 0.05);
-  fIndex = new OneEuroFilter3D(1.4, 0.05);
-  fIndexMcp = new OneEuroFilter3D(1.2, 0.04);
-  fWrist = new OneEuroFilter3D(1.2, 0.04);
-  fMiddleTip = new OneEuroFilter3D(1.4, 0.05);
-  fCursor = new OneEuroFilter2D(2.0, 0.03);
+  fThumb = new OneEuroFilter3D(1.2, 0.08);
+  fIndex = new OneEuroFilter3D(1.2, 0.08);
+  fIndexMcp = new OneEuroFilter3D(1.0, 0.06);
+  fWrist = new OneEuroFilter3D(1.0, 0.06);
+  fMiddleTip = new OneEuroFilter3D(1.2, 0.08);
+  fCursor = new OneEuroFilter2D(1.25, 0.08);
   smoothedThumb: [number, number, number] | null = null;
   smoothedIndex: [number, number, number] | null = null;
   prevPinch: number | null = null;
