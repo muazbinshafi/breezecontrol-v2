@@ -412,11 +412,14 @@ export class GestureEngine {
         this.lastPrimary = primary.side;
         confidence = primary.score;
 
-        // Emit motion from the primary hand. Then, for any OTHER hand
-        // that is firing a click/scroll/right-click, emit its event too
-        // (without moving the cursor) so both hands can act in parallel.
+        // Emit motion from EVERY hand with intent. This keeps both hands live
+        // at the same time for the local bridge; the primary hand is only the
+        // one mirrored into the single in-page cursor/telemetry surface.
         let surfaceGesture = primary.gesture;
-        this.emitMotion(primary.h, primary.gesture, primary.pressure);
+        const motionHands = perHand.filter((p) => p.cursorIntent || p.gesture !== "none");
+        for (const p of motionHands.length > 0 ? motionHands : [primary]) {
+          this.emitMotion(p.h, p.gesture, p.pressure, p.side);
+        }
         for (const p of perHand) {
           if (p.side === primary.side) continue;
           if (p.gesture === "click" || p.gesture === "right_click" ||
@@ -426,7 +429,7 @@ export class GestureEngine {
             // cursor currently is. This matches the user's mental model:
             // "right hand aims, left hand taps to click".
             surfaceGesture = p.gesture;
-            this.emitMotion(primary.h, p.gesture, p.pressure);
+            this.emitMotion(primary.h, p.gesture, p.pressure, primary.side);
           }
         }
 
@@ -828,7 +831,7 @@ export class GestureEngine {
     };
   }
 
-  private emitMotion(h: HandState, gesture: GestureKind, pressure: number) {
+  private emitMotion(h: HandState, gesture: GestureKind, pressure: number, hand: "Left" | "Right") {
     this.bridge.send({
       event: "motion",
       data: {
@@ -836,6 +839,7 @@ export class GestureEngine {
         y: h.cursor.y,
         pressure,
         gesture,
+        hand,
       },
       timestamp: Date.now(),
     });
