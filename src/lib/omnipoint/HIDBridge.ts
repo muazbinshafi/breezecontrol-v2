@@ -18,6 +18,7 @@ export interface MotionPayload {
     y: number;
     pressure: number;
     gesture: GestureKind;
+    hand?: "Left" | "Right";
   };
   timestamp: number;
 }
