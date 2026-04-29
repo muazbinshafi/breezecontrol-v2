@@ -790,7 +790,7 @@ export class GestureEngine {
     const isStaticPose =
       gesture === "open_palm" || gesture === "palm_back" || gesture === "thumbs_up" ||
       gesture === "pinky_only" || gesture === "four_fingers" ||
-      gesture === "fist" || gesture === "middle_only" ||
+      gesture === "middle_only" ||
       gesture === "ring_only" || gesture === "two_finger_point" ||
       gesture === "three_fingers" || gesture === "peace" ||
       gesture === "rock" || gesture === "phone_call" ||
