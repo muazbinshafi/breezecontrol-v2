@@ -665,18 +665,24 @@ export class GestureEngine {
     const isPeace = thumbExt && indexExt && middleExt && !ringExt && !pinkyExt;
     const isRock = indexExt && pinkyExt && !middleExt && !ringExt;
     const isPhoneCall = thumbExt && pinkyExt && !indexExt && !middleExt && !ringExt;
-    const isPointing = indexExt && !middleExt && !ringExt && !pinkyExt;
+    // Cursor should move ONLY from the index finger. A natural pinch keeps
+    // the index extended; if the index is folded, treat the pose as a static
+    // shortcut/no-op rather than moving or clicking.
+    const isIndexControlPose = indexExt && !middleExt && !ringExt && !pinkyExt;
+    const isPointing = isIndexControlPose && !thumbExt;
     const isThreePinch = pinch < effClickThreshold &&
                          tmPinch < effClickThreshold * 1.4 &&
                          indexExt && middleExt;
-    const isPinchClick = pinch < effClickThreshold && !isThreePinch;
+    const isPinchClick = isIndexControlPose && pinch < effClickThreshold && !isThreePinch;
 
     // ===== Cursor-motion gate (per user spec) =====
-    // Move only when intentionally pointing, pinching, scrolling, or fisted.
+    // Move only when intentionally pointing with the index finger, pinching
+    // with the index finger, or scrolling. Static poses/fist do not move the
+    // cursor, matching the requested "move cursor only when index moves" rule.
     // This prevents the cursor from sliding while the user holds open-palm
     // (undo) or other static shortcut poses.
     const cursorAllowed =
-      isPointing || isPinchClick || isThreePinch || scrollMode || isFist;
+      isPointing || isPinchClick || isThreePinch || scrollMode;
     if (cursorAllowed) {
       h.cursor.x = pendingCursor.x;
       h.cursor.y = pendingCursor.y;
