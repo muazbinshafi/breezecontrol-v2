@@ -162,20 +162,20 @@ export class GestureEngine {
    */
   /** Tune One-Euro params for ONE hand based on its own cursor speed. */
   private applySmoothingParams(h: HandState) {
-    const baseCutoff = Math.max(0.3, Math.min(6, this.config.smoothingAlpha));
-    // Stillness is per-hand now. If the hand has never produced a sample
-    // (just appeared), keep stillness at 0 so the filter doesn't lock.
+    const baseCutoff = Math.max(0.45, Math.min(4.5, this.config.smoothingAlpha));
+    // Keep the filter fluid instead of "locking" when the hand slows down;
+    // the old stillness clamp felt like the cursor got stuck on one point.
     const stillness = h.smoothedIndex
-      ? Math.max(0, Math.min(1, 1 - h.cursorSpeed * 8))
+      ? Math.max(0, Math.min(1, 1 - h.cursorSpeed * 18))
       : 0;
-    const minCutoff = baseCutoff * (1 - 0.55 * stillness) + 0.6 * stillness;
-    const beta = 0.015 + baseCutoff * 0.012;
+    const minCutoff = baseCutoff * (1 - 0.18 * stillness) + 0.75 * stillness;
+    const beta = 0.045 + baseCutoff * 0.045;
     h.fThumb.setParams(minCutoff, beta);
     h.fIndex.setParams(minCutoff, beta);
     h.fIndexMcp.setParams(minCutoff * 0.9, beta);
     h.fWrist.setParams(minCutoff * 0.9, beta);
     h.fMiddleTip.setParams(minCutoff, beta);
-    h.fCursor.setParams(Math.min(6, minCutoff + 0.8), beta + 0.015);
+    h.fCursor.setParams(Math.min(5, minCutoff + 0.35), beta + 0.05);
   }
 
   async init(
