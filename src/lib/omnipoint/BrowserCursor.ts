@@ -255,6 +255,48 @@ export class BrowserCursor {
     this.root.appendChild(this.ring);
     this.root.appendChild(this.dot);
     this.root.appendChild(this.label);
+
+    // Secondary-hand cursor — a smaller accent ring + label so the user
+    // can see where their second hand is acting. Hidden by default until
+    // the engine actually reports two hands this frame.
+    this.secondaryCursor = document.createElement("div");
+    Object.assign(this.secondaryCursor.style, {
+      position: "absolute",
+      width: "34px",
+      height: "34px",
+      marginLeft: "-17px",
+      marginTop: "-17px",
+      borderRadius: "9999px",
+      border: "2px solid hsl(var(--accent, var(--primary)))",
+      boxShadow:
+        "0 0 0 2px hsl(var(--background) / 0.55), 0 0 14px hsl(var(--primary) / 0.45)",
+      transition: "transform 90ms ease-out, opacity 120ms ease-out, background-color 120ms ease-out",
+      transform: "translate3d(0,0,0) scale(1)",
+      backgroundColor: "hsl(var(--primary) / 0.08)",
+      opacity: "0",
+      willChange: "transform, opacity",
+    } as CSSStyleDeclaration);
+    this.secondaryLabel = document.createElement("div");
+    Object.assign(this.secondaryLabel.style, {
+      position: "absolute",
+      transform: "translate3d(0,0,0)",
+      marginLeft: "22px",
+      marginTop: "-8px",
+      fontFamily: "ui-monospace, 'JetBrains Mono', monospace",
+      fontSize: "9px",
+      letterSpacing: "0.18em",
+      padding: "2px 5px",
+      borderRadius: "4px",
+      color: "hsl(var(--primary-foreground))",
+      backgroundColor: "hsl(var(--primary) / 0.85)",
+      whiteSpace: "nowrap",
+      textTransform: "uppercase",
+      opacity: "0",
+      transition: "opacity 120ms ease-out",
+    } as CSSStyleDeclaration);
+    this.root.appendChild(this.secondaryCursor);
+    this.root.appendChild(this.secondaryLabel);
+
     this._handConnections = HAND_CONNECTIONS;
   }
 
