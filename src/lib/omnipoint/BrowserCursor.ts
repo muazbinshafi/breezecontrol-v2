@@ -1036,12 +1036,9 @@ export class BrowserCursor {
         this.setLabel("DROP");
       }
 
-      // Draw mode must react immediately to a real pinch. The previous
-      // version used the normalized pinch ratio as a fallback; keep that
-      // behavior so drawing still works when the engine commits a brief
-      // non-drawing gesture between click/drag frames.
-      const settings = GestureSettingsStore.get();
-      const isPinching = snap.pinchDistance > 0 && snap.pinchDistance < settings.drawPinchThreshold;
+      // Draw mode now trusts the rebuilt gesture engine only. Raw pinch
+      // distance is no longer used as a shortcut because it can put ink down
+      // while the action hand is only moving into position.
       // POSE GATE: only put down ink when the user is actually pointing —
       // index extended, middle + ring + pinky folded. This prevents a moving
       // open hand or fist from drawing. Thumb is allowed in either state so
@@ -1050,7 +1047,7 @@ export class BrowserCursor {
       const indexOnlyPose =
         snap.handPresent && ext[1] && !ext[2] && !ext[3] && !ext[4];
       const isDrawing =
-        indexOnlyPose && (g === "click" || g === "drag" || g === "point" || isPinching);
+        indexOnlyPose && (g === "click" || g === "drag");
       const tool = PaintStore.get().tool;
       const isShape = PaintStore.isShape(tool);
       const isFill = PaintStore.isFill(tool);
