@@ -23,11 +23,11 @@ export interface EngineConfig {
 }
 
 export const defaultConfig: EngineConfig = {
-  sensitivity: 1.4,
+  sensitivity: 1.15,
   // Lower minCutoff → smoother. With our adaptive precision-mode below, the
   // engine drops cutoff further when the hand is nearly still, so we can keep
   // the baseline snappy here without sacrificing sub-mm steadiness.
-  smoothingAlpha: 1.0,
+  smoothingAlpha: 0.85,
   // pinch is now a *ratio* of hand size (pinchDist / index-MCP→wrist).
   // index-MCP→wrist is ~70% of middle-MCP→wrist, so the same physical gap
   // yields a *larger* ratio — making sub-cm pinches far easier to trigger.
@@ -37,7 +37,7 @@ export const defaultConfig: EngineConfig = {
   releaseThreshold: 0.78,
   scrollSensitivity: 14,
   aspectRatio: 16 / 9,
-  deadZone: 0.0004,
+  deadZone: 0.00008,
 };
 
 const HAND_CONNECTIONS: [number, number][] = [
@@ -59,12 +59,12 @@ type ClickState = "IDLE" | "CLICK_DOWN" | "DRAG";
  * or scroll independently.
  */
 class HandState {
-  fThumb = new OneEuroFilter3D(1.4, 0.05);
-  fIndex = new OneEuroFilter3D(1.4, 0.05);
-  fIndexMcp = new OneEuroFilter3D(1.2, 0.04);
-  fWrist = new OneEuroFilter3D(1.2, 0.04);
-  fMiddleTip = new OneEuroFilter3D(1.4, 0.05);
-  fCursor = new OneEuroFilter2D(2.0, 0.03);
+  fThumb = new OneEuroFilter3D(1.2, 0.08);
+  fIndex = new OneEuroFilter3D(1.2, 0.08);
+  fIndexMcp = new OneEuroFilter3D(1.0, 0.06);
+  fWrist = new OneEuroFilter3D(1.0, 0.06);
+  fMiddleTip = new OneEuroFilter3D(1.2, 0.08);
+  fCursor = new OneEuroFilter2D(1.25, 0.08);
   smoothedThumb: [number, number, number] | null = null;
   smoothedIndex: [number, number, number] | null = null;
   prevPinch: number | null = null;
@@ -162,20 +162,20 @@ export class GestureEngine {
    */
   /** Tune One-Euro params for ONE hand based on its own cursor speed. */
   private applySmoothingParams(h: HandState) {
-    const baseCutoff = Math.max(0.3, Math.min(6, this.config.smoothingAlpha));
-    // Stillness is per-hand now. If the hand has never produced a sample
-    // (just appeared), keep stillness at 0 so the filter doesn't lock.
+    const baseCutoff = Math.max(0.45, Math.min(4.5, this.config.smoothingAlpha));
+    // Keep the filter fluid instead of "locking" when the hand slows down;
+    // the old stillness clamp felt like the cursor got stuck on one point.
     const stillness = h.smoothedIndex
-      ? Math.max(0, Math.min(1, 1 - h.cursorSpeed * 8))
+      ? Math.max(0, Math.min(1, 1 - h.cursorSpeed * 18))
       : 0;
-    const minCutoff = baseCutoff * (1 - 0.55 * stillness) + 0.6 * stillness;
-    const beta = 0.015 + baseCutoff * 0.012;
+    const minCutoff = baseCutoff * (1 - 0.18 * stillness) + 0.75 * stillness;
+    const beta = 0.045 + baseCutoff * 0.045;
     h.fThumb.setParams(minCutoff, beta);
     h.fIndex.setParams(minCutoff, beta);
     h.fIndexMcp.setParams(minCutoff * 0.9, beta);
     h.fWrist.setParams(minCutoff * 0.9, beta);
     h.fMiddleTip.setParams(minCutoff, beta);
-    h.fCursor.setParams(Math.min(6, minCutoff + 0.8), beta + 0.015);
+    h.fCursor.setParams(Math.min(5, minCutoff + 0.35), beta + 0.05);
   }
 
   async init(
@@ -365,7 +365,8 @@ export class GestureEngine {
         const indexControlPose = out.fingersExtended[1] && !out.fingersExtended[2] && !out.fingersExtended[3] && !out.fingersExtended[4];
         const cursorIntent = indexControlPose || out.gesture === "scroll_up" || out.gesture === "scroll_down";
         const fingers = out.fingerCount - (out.fingersExtended[0] ? 1 : 0);
-        const poseIntent = cursorIntent ? 0.9 : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
+        const motionIntent = Math.min(0.35, h.cursorSpeed * 0.08);
+        const poseIntent = cursorIntent ? 0.9 + motionIntent : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
         // Active gestures get only a tiny boost. Previously pinch/click got a
         // huge boost and stole primary control from the pointing hand, making
         // dual-hand use feel like "only one hand works".
@@ -405,28 +406,37 @@ export class GestureEngine {
         const primaryPool = cursorCandidates.length > 0 ? cursorCandidates : perHand;
         let primary = primaryPool[0];
         for (const p of primaryPool) {
-          const bias = p.side === this.lastPrimary ? 0.15 : 0;
-          const pBias = primary.side === this.lastPrimary ? 0.15 : 0;
+          const bias = p.side === this.lastPrimary ? 0.03 : 0;
+          const pBias = primary.side === this.lastPrimary ? 0.03 : 0;
           if (p.intent + bias > primary.intent + pBias) primary = p;
         }
         this.lastPrimary = primary.side;
         confidence = primary.score;
 
-        // Emit motion from the primary hand. Then, for any OTHER hand
-        // that is firing a click/scroll/right-click, emit its event too
-        // (without moving the cursor) so both hands can act in parallel.
+        // Emit one merged control stream: the primary hand supplies smooth
+        // index-finger coordinates; either hand can supply the active action.
+        // This avoids point/drag packet fighting in the local OS bridge.
         let surfaceGesture = primary.gesture;
-        this.emitMotion(primary.h, primary.gesture, primary.pressure);
+        const secondaryActions = perHand.filter((p) =>
+          p.side !== primary.side &&
+          (p.gesture === "click" || p.gesture === "right_click" ||
+           p.gesture === "drag" || p.gesture === "scroll_up" ||
+           p.gesture === "scroll_down" || p.gesture === "fist")
+        );
+        if (secondaryActions.length === 0) {
+          this.emitMotion(primary.h, primary.gesture, primary.pressure, primary.side);
+        }
         for (const p of perHand) {
           if (p.side === primary.side) continue;
           if (p.gesture === "click" || p.gesture === "right_click" ||
-              p.gesture === "scroll_up" || p.gesture === "scroll_down") {
+              p.gesture === "drag" || p.gesture === "scroll_up" ||
+              p.gesture === "scroll_down" || p.gesture === "fist") {
             // Use the primary cursor coordinates — secondary hand contributes
             // the gesture, but the click target is wherever the primary
             // cursor currently is. This matches the user's mental model:
             // "right hand aims, left hand taps to click".
             surfaceGesture = p.gesture;
-            this.emitMotion(primary.h, p.gesture, p.pressure);
+            this.emitMotion(primary.h, p.gesture, p.pressure, p.side);
           }
         }
 
@@ -677,7 +687,7 @@ export class GestureEngine {
     // the index extended; if the index is folded, treat the pose as a static
     // shortcut/no-op rather than moving or clicking.
     const isIndexControlPose = indexExt && !middleExt && !ringExt && !pinkyExt;
-    const isPointing = isIndexControlPose && !thumbExt;
+    const isPointing = isIndexControlPose;
     const isThreePinch = pinch < effClickThreshold &&
                          tmPinch < effClickThreshold * 1.4 &&
                          indexExt && middleExt;
@@ -828,7 +838,7 @@ export class GestureEngine {
     };
   }
 
-  private emitMotion(h: HandState, gesture: GestureKind, pressure: number) {
+  private emitMotion(h: HandState, gesture: GestureKind, pressure: number, hand: "Left" | "Right") {
     this.bridge.send({
       event: "motion",
       data: {
@@ -836,6 +846,7 @@ export class GestureEngine {
         y: h.cursor.y,
         pressure,
         gesture,
+        hand,
       },
       timestamp: Date.now(),
     });
