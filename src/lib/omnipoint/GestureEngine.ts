@@ -321,6 +321,7 @@ export class GestureEngine {
         fingerCount: number;
         pinch: number;
         rawIndex: number;
+        cursorIntent: boolean;
       }[] = [];
 
       const rawSides = result.landmarks.map((lm, i) => {
@@ -361,16 +362,18 @@ export class GestureEngine {
         const out = this.processHand(result, tNow, i, side, h);
         // Compute intent score for primary-hand selection.
         const score = result.handedness?.[i]?.[0]?.score ?? 0.8;
+        const indexControlPose = out.fingersExtended[1] && !out.fingersExtended[2] && !out.fingersExtended[3] && !out.fingersExtended[4];
+        const cursorIntent = indexControlPose || out.gesture === "scroll_up" || out.gesture === "scroll_down";
         const fingers = out.fingerCount - (out.fingersExtended[0] ? 1 : 0);
-        const pinchIntent = Math.max(0, 1 - out.pinch / 0.8);
-        const poseIntent = fingers === 1 || fingers === 4 || fingers === 0 ? 0.4 : 0.15;
-        // Active gestures (click/drag/scroll) get a big boost so that hand
-        // wins as primary the moment the user acts with it.
+        const poseIntent = cursorIntent ? 0.9 : (fingers === 4 || fingers === 0 ? 0.25 : 0.1);
+        // Active gestures get only a tiny boost. Previously pinch/click got a
+        // huge boost and stole primary control from the pointing hand, making
+        // dual-hand use feel like "only one hand works".
         const actionBoost =
           out.gesture === "click" || out.gesture === "drag" ||
           out.gesture === "scroll_up" || out.gesture === "scroll_down" ||
-          out.gesture === "right_click" ? 1.5 : 0;
-        const intent = pinchIntent * 1.2 + poseIntent + score * 0.3 + actionBoost;
+          out.gesture === "right_click" ? 0.12 : 0;
+        const intent = poseIntent + score * 0.25 + actionBoost;
         perHand.push({
           side, h, intent, score,
           gesture: out.gesture,
@@ -380,6 +383,7 @@ export class GestureEngine {
           fingerCount: out.fingerCount,
           pinch: out.pinch,
           rawIndex: i,
+          cursorIntent,
         });
       }
 
