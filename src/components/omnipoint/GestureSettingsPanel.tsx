@@ -116,14 +116,12 @@ export function GestureSettingsPanel() {
       </button>
 
       {open && (
-        <div
-          className="fixed inset-0 z-[2147483647] bg-background/70 backdrop-blur-sm flex justify-end"
-          onClick={() => setOpen(false)}
+        <aside
+          // Docked side panel — sits NEXT TO the page instead of overlaying
+          // it. No backdrop, no blur, page stays interactive underneath.
+          className="fixed top-14 right-0 bottom-0 w-[420px] max-w-[92vw] z-[60] bg-card border-l border-border shadow-2xl overflow-y-auto"
         >
-          <aside
-            onClick={(e) => e.stopPropagation()}
-            className="w-[440px] max-w-full h-full bg-card border-l border-border overflow-y-auto"
-          >
+          <div>
             <header className="sticky top-0 z-10 bg-card border-b hairline px-4 h-12 flex items-center justify-between">
               <div className="font-mono text-[11px] tracking-[0.3em] text-emerald-glow">
                 ▣ GESTURE CUSTOMIZATION
@@ -381,8 +379,8 @@ export function GestureSettingsPanel() {
                 RESET TO DEFAULTS
               </button>
             </section>
-          </aside>
-        </div>
+          </div>
+        </aside>
       )}
     </>
   );

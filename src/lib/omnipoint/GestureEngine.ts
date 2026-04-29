@@ -428,8 +428,16 @@ export class GestureEngine {
     this.updateContinuousCursor(state, target.x, target.y, tNow);
 
     const handScale = Math.max(0.045, Math.hypot(imx - wx, imy - wy, imz - wz));
+    // Absolute 3D thumb-tip ↔ index-tip distance (in normalized image space).
+    // We use the RAW tip distance for the "actually touching" test so the
+    // pinch only fires when fingertips physically meet, not just when they
+    // are merely close in the smoothed coordinate space.
+    const rawTipDist = Math.hypot(lm[4].x - lm[8].x, lm[4].y - lm[8].y, lm[4].z - lm[8].z);
     const pinch = Math.hypot(tx - ix, ty - iy, tz - iz) / handScale;
     const middlePinch = Math.hypot(tx - mx, ty - my, tz - mz) / handScale;
+    // Touch requires fingertip distance < ~ a fingertip radius relative to
+    // the hand. Empirically ~22% of the index-MCP-to-wrist span ≈ touching.
+    const touchAbs = rawTipDist < handScale * 0.22;
     if (state.lastPinch != null && state.lastPinchAt > 0) {
       const dt = Math.max(0.001, (tNow - state.lastPinchAt) / 1000);
       state.pinchVelocity = state.pinchVelocity * 0.55 + ((pinch - state.lastPinch) / dt) * 0.45;
@@ -441,12 +449,16 @@ export class GestureEngine {
     const clickThreshold = this.config.clickThreshold + closingBoost;
     const releaseThreshold = Math.max(this.config.releaseThreshold, this.config.clickThreshold + 0.08);
     const isThreePinch = twoFingerScroll && pinch < clickThreshold && middlePinch < clickThreshold * 1.45;
-    // Pinch is now driven purely by thumb-index proximity. We only require
-    // the index finger to be extended (so a closed fist with thumb tucked
-    // against the index won't fire), but we no longer require middle/ring/
-    // pinky to be folded. This makes click + draw fire reliably whenever
-    // the user pinches, regardless of subtle finger pose variations.
-    const isPinch = indexExt && pinch < clickThreshold && !isThreePinch;
+    // STRICT pinch: fingertips must ACTUALLY touch (touchAbs) AND the
+    // smoothed pinch distance must be under threshold AND the index finger
+    // must be extended. Once a pinch is active we relax the touchAbs gate
+    // (use ratio-based release) so a held drag doesn't drop on micro-jitter.
+    const pinchActive = state.clickState !== "UP";
+    const isPinch = indexExt && !isThreePinch && (
+      pinchActive
+        ? pinch < releaseThreshold
+        : (touchAbs && pinch < clickThreshold)
+    );
     const pressure = clamp01(1 - pinch / releaseThreshold);
 
     let scrollDelta = 0;
@@ -606,13 +618,25 @@ export class GestureEngine {
   }
 
   private isPalmBack(lm: Vec3[], side: Side) {
+    // Use a true 3D palm normal: cross( indexMCP-wrist , pinkyMCP-wrist ).
+    // The sign of the normal's Z component (camera-space depth) tells us
+    // whether the palm is facing the camera or facing away. We add a small
+    // dead-band so a hand at near-perpendicular doesn't flicker.
     const wrist = lm[0];
     const ax = lm[5].x - wrist.x;
     const ay = lm[5].y - wrist.y;
+    const az = lm[5].z - wrist.z;
     const bx = lm[17].x - wrist.x;
     const by = lm[17].y - wrist.y;
-    const crossZ = ax * by - ay * bx;
-    return side === "Right" ? crossZ <= 0 : crossZ >= 0;
+    const bz = lm[17].z - wrist.z;
+    // Right-handed cross product
+    const nz = ax * by - ay * bx;
+    // For the user's RIGHT hand seen by a selfie camera, palm-toward-camera
+    // produces nz > 0; LEFT hand is mirrored. Use a small magnitude gate to
+    // avoid noise near edge-on poses.
+    const DEAD = 0.004;
+    if (Math.abs(nz) < DEAD) return false; // ambiguous → treat as palm-front
+    return side === "Right" ? nz < 0 : nz > 0;
   }
 
   private commitStaticGesture(state: HandState, gesture: GestureKind): GestureKind {
