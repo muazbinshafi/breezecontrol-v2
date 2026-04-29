@@ -1546,8 +1546,8 @@ export class BrowserCursor {
         this.setLabel("PLAY");
         break;
       case "fullscreen":
-        this.dispatchKey("f", 70);
-        this.setLabel("FULL");
+        void this.toggleFullscreen();
+        this.setLabel(document.fullscreenElement ? "EXIT FULL" : "FULL");
         break;
       case "screenshot":
         if (this.mode === "draw") this.saveAsPng();
