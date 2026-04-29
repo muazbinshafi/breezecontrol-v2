@@ -54,6 +54,20 @@ export class BrowserCursor {
   private lastScrollAt = 0;
   private lastDrawPt: DrawSegment | null = null;
   private wasDrawActive = false;
+
+  // ─── SECONDARY HAND (dual-hand independent control) ─────────────────
+  // The engine reports up to 2 hands per frame. The primary hand drives
+  // the main cursor (above). The secondary hand gets its own cursor +
+  // independent click / drag / freehand-draw routing so BOTH hands can
+  // act at the same time with the same set of functions.
+  private secondaryCursor: HTMLDivElement | null = null;
+  private secondaryLabel: HTMLDivElement | null = null;
+  private isDown2 = false;
+  private lastTarget2: Element | null = null;
+  private lastClickAt2 = 0;
+  private lastGesture2: GestureKind = "none";
+  private lastDrawPt2: DrawSegment | null = null;
+  private wasDrawActive2 = false;
   // Shape preview state — when drawing a shape we hold the start anchor
   // and a snapshot of the canvas to redraw the rubber-band on each frame.
   private shapeStart: DrawSegment | null = null;
@@ -241,6 +255,48 @@ export class BrowserCursor {
     this.root.appendChild(this.ring);
     this.root.appendChild(this.dot);
     this.root.appendChild(this.label);
+
+    // Secondary-hand cursor — a smaller accent ring + label so the user
+    // can see where their second hand is acting. Hidden by default until
+    // the engine actually reports two hands this frame.
+    this.secondaryCursor = document.createElement("div");
+    Object.assign(this.secondaryCursor.style, {
+      position: "absolute",
+      width: "34px",
+      height: "34px",
+      marginLeft: "-17px",
+      marginTop: "-17px",
+      borderRadius: "9999px",
+      border: "2px solid hsl(var(--accent, var(--primary)))",
+      boxShadow:
+        "0 0 0 2px hsl(var(--background) / 0.55), 0 0 14px hsl(var(--primary) / 0.45)",
+      transition: "transform 90ms ease-out, opacity 120ms ease-out, background-color 120ms ease-out",
+      transform: "translate3d(0,0,0) scale(1)",
+      backgroundColor: "hsl(var(--primary) / 0.08)",
+      opacity: "0",
+      willChange: "transform, opacity",
+    } as CSSStyleDeclaration);
+    this.secondaryLabel = document.createElement("div");
+    Object.assign(this.secondaryLabel.style, {
+      position: "absolute",
+      transform: "translate3d(0,0,0)",
+      marginLeft: "22px",
+      marginTop: "-8px",
+      fontFamily: "ui-monospace, 'JetBrains Mono', monospace",
+      fontSize: "9px",
+      letterSpacing: "0.18em",
+      padding: "2px 5px",
+      borderRadius: "4px",
+      color: "hsl(var(--primary-foreground))",
+      backgroundColor: "hsl(var(--primary) / 0.85)",
+      whiteSpace: "nowrap",
+      textTransform: "uppercase",
+      opacity: "0",
+      transition: "opacity 120ms ease-out",
+    } as CSSStyleDeclaration);
+    this.root.appendChild(this.secondaryCursor);
+    this.root.appendChild(this.secondaryLabel);
+
     this._handConnections = HAND_CONNECTIONS;
   }
 
@@ -983,6 +1039,10 @@ export class BrowserCursor {
     const g = snap.gesture;
     this.setRingState(g);
 
+    // Dual-hand: route the secondary hand (if present) through its own
+    // independent click / drag / draw pipeline so both hands act at once.
+    this.processSecondaryHand(snap);
+
     if (this.mode === "draw") {
       // Fist-as-grab in draw mode: if a selection rect already exists, drag
       // it; otherwise spawn a 200×200 floating selection around the cursor
@@ -1036,18 +1096,12 @@ export class BrowserCursor {
         this.setLabel("DROP");
       }
 
-      // Draw mode now trusts the rebuilt gesture engine only. Raw pinch
-      // distance is no longer used as a shortcut because it can put ink down
-      // while the action hand is only moving into position.
-      // POSE GATE: only put down ink when the user is actually pointing —
-      // index extended, middle + ring + pinky folded. This prevents a moving
-      // open hand or fist from drawing. Thumb is allowed in either state so
-      // the natural pinch (thumb+index) still counts.
-      const ext = snap.fingersExtended; // [thumb, index, middle, ring, pinky]
-      const indexOnlyPose =
-        snap.handPresent && ext[1] && !ext[2] && !ext[3] && !ext[4];
-      const isDrawing =
-        indexOnlyPose && (g === "click" || g === "drag");
+      // Draw mode trusts the rebuilt gesture engine. A pinch (thumb+index
+      // close together) is what arms drawing — the engine already requires
+      // the index finger to be extended so a closed fist won't accidentally
+      // start an ink stroke. We no longer require all the other fingers to
+      // be folded, which used to make natural pinches fail to draw.
+      const isDrawing = g === "click" || g === "drag";
       const tool = PaintStore.get().tool;
       const isShape = PaintStore.isShape(tool);
       const isFill = PaintStore.isFill(tool);
@@ -1364,6 +1418,139 @@ export class BrowserCursor {
 
     this.lastGesture = g;
   };
+
+  /**
+   * Process the secondary (non-primary) hand independently so both hands
+   * can click, drag and draw at the same time. The primary hand is handled
+   * by the main loop; this method mirrors a focused subset of that logic
+   * (click, drag, freehand draw) at the secondary hand's own cursor
+   * coordinates, with its own state so the two hands never block each other.
+   */
+  private processSecondaryHand(snap: ReturnType<typeof TelemetryStore.get>) {
+    const ring = this.secondaryCursor;
+    const labelEl = this.secondaryLabel;
+    if (!ring || !labelEl) return;
+
+    const secondary = (snap.hands ?? []).find((h) => !h.isPrimary);
+    if (!secondary || this.mode === "off") {
+      ring.style.opacity = "0";
+      labelEl.style.opacity = "0";
+      if (this.isDown2 && this.lastTarget2) {
+        this.dispatchUp(this.lastTarget2);
+        this.isDown2 = false;
+      }
+      this.lastDrawPt2 = null;
+      this.wasDrawActive2 = false;
+      this.lastGesture2 = "none";
+      return;
+    }
+
+    const { x, y } = this.resolveScreenXY(secondary.cursorX, secondary.cursorY);
+    ring.style.left = `${x}px`;
+    ring.style.top = `${y}px`;
+    ring.style.opacity = "1";
+    labelEl.style.left = `${x}px`;
+    labelEl.style.top = `${y}px`;
+
+    const g2 = secondary.gesture;
+
+    if (this.mode === "draw") {
+      const isDrawing2 = g2 === "click" || g2 === "drag";
+      const tool = PaintStore.get().tool;
+      // Only support freehand drawing on the secondary hand to keep the
+      // dual-hand pipeline predictable (no shape rubber-banding tied to a
+      // single anchor competing across hands).
+      if (!PaintStore.isShape(tool) && !PaintStore.isFill(tool) && !PaintStore.isSpecial(tool)) {
+        if (isDrawing2) {
+          if (!this.lastDrawPt2) {
+            const snapImg = this.snapshotCanvas();
+            if (snapImg) PaintHistory.push(snapImg);
+          }
+          this.drawFreehandSecondary(x, y);
+        } else {
+          this.lastDrawPt2 = null;
+        }
+      }
+      labelEl.textContent = isDrawing2 ? `${secondary.side}·DRAW` : `${secondary.side}`;
+      labelEl.style.opacity = isDrawing2 ? "1" : "0.55";
+      this.wasDrawActive2 = isDrawing2;
+      this.lastGesture2 = g2;
+      return;
+    }
+
+    // Pointer mode — independent click / drag at the secondary hand position.
+    const target = this.hitTest(x, y);
+    this.dispatchSecondaryMove(target, x, y);
+
+    const now = performance.now();
+    const transitioned = (k: GestureKind) => g2 === k && this.lastGesture2 !== k;
+
+    if (g2 === "drag" && !this.isDown2) {
+      this.dispatchDown(target, x, y);
+      this.isDown2 = true;
+      labelEl.textContent = `${secondary.side}·DRAG`;
+      labelEl.style.opacity = "1";
+    } else if (this.isDown2 && g2 !== "drag") {
+      this.dispatchUp(this.lastTarget2);
+      this.dispatchClick(this.lastTarget2, x, y);
+      this.isDown2 = false;
+    }
+
+    if (transitioned("click") && now - this.lastClickAt2 > 220 && !this.isDown2) {
+      this.dispatchDown(target, x, y);
+      this.dispatchUp(target);
+      this.dispatchClick(target, x, y);
+      this.lastClickAt2 = now;
+      labelEl.textContent = `${secondary.side}·CLICK`;
+      labelEl.style.opacity = "1";
+    } else {
+      labelEl.textContent = `${secondary.side}`;
+      labelEl.style.opacity = "0.55";
+    }
+
+    this.lastGesture2 = g2;
+  }
+
+  /** Pointer-move dispatcher specific to the secondary hand. */
+  private dispatchSecondaryMove(target: Element | null, x: number, y: number) {
+    if (!target) return;
+    const init: PointerEventInit = {
+      bubbles: true, cancelable: true, composed: true,
+      clientX: x, clientY: y, pointerType: "mouse",
+      pointerId: 2, isPrimary: false, button: -1,
+      buttons: this.isDown2 ? 1 : 0,
+    };
+    if (target !== this.lastTarget2) {
+      if (this.lastTarget2) {
+        this.lastTarget2.dispatchEvent(new PointerEvent("pointerout", init));
+        this.lastTarget2.dispatchEvent(new MouseEvent("mouseout", init));
+      }
+      target.dispatchEvent(new PointerEvent("pointerover", init));
+      target.dispatchEvent(new MouseEvent("mouseover", init));
+      this.lastTarget2 = target;
+    }
+    target.dispatchEvent(new PointerEvent("pointermove", init));
+    target.dispatchEvent(new MouseEvent("mousemove", init));
+  }
+
+  /** Freehand draw at the secondary hand position. */
+  private drawFreehandSecondary(x: number, y: number) {
+    if (!this.drawCtx) return;
+    const paint = PaintStore.get();
+    const ctx = this.drawCtx;
+    ctx.globalCompositeOperation = paint.tool === "eraser" ? "destination-out" : "source-over";
+    ctx.strokeStyle = paint.color;
+    ctx.lineWidth = paint.size;
+    ctx.beginPath();
+    if (this.lastDrawPt2) {
+      ctx.moveTo(this.lastDrawPt2.x, this.lastDrawPt2.y);
+    } else {
+      ctx.moveTo(x, y);
+    }
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    this.lastDrawPt2 = { x, y };
+  }
 
   /**
    * Buffer-then-fire dispatcher for static poses. Requires the same pose

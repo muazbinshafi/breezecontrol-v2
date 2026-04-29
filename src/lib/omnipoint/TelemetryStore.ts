@@ -60,6 +60,22 @@ export interface HandDebugInfo {
   isPrimary: boolean;
 }
 
+/**
+ * Per-hand actionable snapshot — one entry per tracked hand each frame.
+ * Lets downstream consumers (BrowserCursor) react to BOTH hands at the
+ * same time so each hand is its own independent pointer + clicker.
+ */
+export interface HandLiveFrame {
+  side: "Left" | "Right";
+  cursorX: number;
+  cursorY: number;
+  gesture: GestureKind;
+  pressure: number;
+  fingersExtended: FingerStates;
+  pinchDistance: number;
+  isPrimary: boolean;
+}
+
 export interface TelemetrySnapshot {
   fps: number;
   inferenceMs: number;
@@ -100,6 +116,8 @@ export interface TelemetrySnapshot {
   handsDetected: number;
   /** Per-hand debug snapshots, ordered by detection slot. */
   handsDebug: HandDebugInfo[];
+  /** Per-hand live frames usable for independent pointer/click routing. */
+  hands: HandLiveFrame[];
   /**
    * Bridge connection diagnostic for the UI banner. `code` is one of:
    *  - "ok"             — connected
@@ -147,6 +165,7 @@ const initial: TelemetrySnapshot = {
   daemon: null,
   handsDetected: 0,
   handsDebug: [],
+  hands: [],
   bridgeError: { code: "idle", message: "Bridge not active" },
   handRoleLock: "auto",
 };
