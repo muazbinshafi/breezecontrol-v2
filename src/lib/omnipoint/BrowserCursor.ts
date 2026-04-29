@@ -322,8 +322,13 @@ export class BrowserCursor {
 
   private resizeCanvas = () => {
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    this.drawCanvas.width = Math.floor(window.innerWidth * dpr);
-    this.drawCanvas.height = Math.floor(window.innerHeight * dpr);
+    const box = this.getActiveViewportBox();
+    this.root.style.left = `${box.left}px`;
+    this.root.style.top = `${box.top}px`;
+    this.root.style.width = `${box.width}px`;
+    this.root.style.height = `${box.height}px`;
+    this.drawCanvas.width = Math.floor(box.width * dpr);
+    this.drawCanvas.height = Math.floor(box.height * dpr);
     if (this.drawCtx) {
       this.drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       this.drawCtx.lineCap = "round";
@@ -331,24 +336,21 @@ export class BrowserCursor {
     }
   };
 
-  private resolveScreenXY(nx: number, ny: number): { x: number; y: number } {
-    // The gesture engine yields normalized [0..1] coordinates inside the
-    // active zone of the camera frame. Map into the on-screen video rect so
-    // the cursor visually tracks the user's hand. If no video element is
-    // visible (e.g. user scrolled away), fall back to the full viewport.
-    const target = document.querySelector(this.targetSelector) as HTMLElement | null;
-    const rect = target?.getBoundingClientRect();
-    if (rect && rect.width > 4 && rect.height > 4 && rect.bottom > 0 && rect.right > 0) {
-      // Expand mapping to the full viewport so the cursor can reach UI
-      // outside the camera tile, while still being centred on the camera
-      // origin. We blend: 60% camera-rect mapping, 40% full-viewport.
-      const camX = rect.left + nx * rect.width;
-      const camY = rect.top + ny * rect.height;
-      const vpX = nx * window.innerWidth;
-      const vpY = ny * window.innerHeight;
-      return { x: camX * 0.55 + vpX * 0.45, y: camY * 0.55 + vpY * 0.45 };
+  private getActiveViewportBox(): { left: number; top: number; width: number; height: number } {
+    const fs = document.fullscreenElement as HTMLElement | null;
+    const rect = fs?.getBoundingClientRect();
+    if (rect && rect.width > 4 && rect.height > 4) {
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
     }
-    return { x: nx * window.innerWidth, y: ny * window.innerHeight };
+    return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+  }
+
+  private resolveScreenXY(nx: number, ny: number): { x: number; y: number } {
+    // Fullscreen-safe: always map normalized coordinates to the actual active
+    // viewport/fullscreen element, not the camera tile. This lets the cursor,
+    // click and drawing canvas reach every pixel in fullscreen.
+    const box = this.getActiveViewportBox();
+    return { x: box.left + nx * box.width, y: box.top + ny * box.height };
   }
 
   private hitTest(x: number, y: number): Element | null {
