@@ -401,8 +401,10 @@ export class GestureEngine {
       if (perHand.length > 0) {
         // Pick primary: highest-intent. Add a small bias for the previous
         // primary so we don't flicker frame-to-frame on near-ties.
-        let primary = perHand[0];
-        for (const p of perHand) {
+        const cursorCandidates = perHand.filter((p) => p.cursorIntent);
+        const primaryPool = cursorCandidates.length > 0 ? cursorCandidates : perHand;
+        let primary = primaryPool[0];
+        for (const p of primaryPool) {
           const bias = p.side === this.lastPrimary ? 0.15 : 0;
           const pBias = primary.side === this.lastPrimary ? 0.15 : 0;
           if (p.intent + bias > primary.intent + pBias) primary = p;
