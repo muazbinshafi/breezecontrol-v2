@@ -403,15 +403,31 @@ export class GestureEngine {
       }
 
       if (perHand.length > 0) {
-        // Pick primary: highest-intent. Add a small bias for the previous
-        // primary so we don't flicker frame-to-frame on near-ties.
-        const cursorCandidates = perHand.filter((p) => p.cursorIntent);
-        const primaryPool = cursorCandidates.length > 0 ? cursorCandidates : perHand;
-        let primary = primaryPool[0];
-        for (const p of primaryPool) {
-          const bias = p.side === this.lastPrimary ? 0.03 : 0;
-          const pBias = primary.side === this.lastPrimary ? 0.03 : 0;
-          if (p.intent + bias > primary.intent + pBias) primary = p;
+        // ===== Primary-hand selection =====
+        // If the user has LOCKED a pointer hand (left/right), that hand is
+        // ALWAYS primary and the other hand is reserved purely for actions
+        // (click/drag/scroll). This eliminates "control stealing" when both
+        // hands are tracked simultaneously. In "auto" mode we fall back to
+        // intent-based selection with a small stickiness bias.
+        const lock = TelemetryStore.get().handRoleLock;
+        const lockedSide: "Left" | "Right" | null =
+          lock === "left_pointer" ? "Left" :
+          lock === "right_pointer" ? "Right" : null;
+        let primary: typeof perHand[number];
+        if (lockedSide) {
+          const locked = perHand.find((p) => p.side === lockedSide);
+          // If the locked pointer hand isn't visible this frame, fall back to
+          // the only visible hand so the cursor doesn't vanish.
+          primary = locked ?? perHand[0];
+        } else {
+          const cursorCandidates = perHand.filter((p) => p.cursorIntent);
+          const primaryPool = cursorCandidates.length > 0 ? cursorCandidates : perHand;
+          primary = primaryPool[0];
+          for (const p of primaryPool) {
+            const bias = p.side === this.lastPrimary ? 0.03 : 0;
+            const pBias = primary.side === this.lastPrimary ? 0.03 : 0;
+            if (p.intent + bias > primary.intent + pBias) primary = p;
+          }
         }
         this.lastPrimary = primary.side;
         confidence = primary.score;
