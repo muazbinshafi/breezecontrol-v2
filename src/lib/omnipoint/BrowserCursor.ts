@@ -1581,6 +1581,21 @@ export class BrowserCursor {
     (document.body.style as CSSStyleDeclaration & { zoom?: string }).zoom = String(next);
   }
 
+  private async toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+        return;
+      }
+      const target =
+        document.querySelector("main") as HTMLElement | null ??
+        document.documentElement;
+      await target.requestFullscreen({ navigationUI: "hide" });
+    } catch {
+      this.dispatchKey("f", 70);
+    }
+  }
+
   private dispatchKey(
     key: string,
     keyCode: number,
